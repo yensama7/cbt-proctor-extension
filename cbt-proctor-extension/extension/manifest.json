@@ -1,0 +1,36 @@
+{
+"manifest_version": 3,
+"name": "CBT Proctor Agent",
+"version": "1.0",
+"description": "Host-based malpractice detection agent for CBT",
+
+"incognito": "split",
+
+"permissions": [
+    "tabs",
+    "windows",
+    "storage",
+    "activeTab"
+],
+
+"host_permissions": [
+    "<all_urls>"
+],
+
+"background": {
+    "service_worker": "service-worker.js"
+},
+
+"content_scripts": [
+    {
+        "matches": ["<all_urls>"],
+        "js": ["content.js"]
+    }
+],
+
+"icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+    }
+}

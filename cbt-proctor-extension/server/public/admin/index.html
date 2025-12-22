@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CBT Admin Dashboard</title>
+    <link rel="stylesheet" href="admin.css">
+</head>
+<body>
+
+<h2>Live Malpractice Alerts</h2>
+
+<table>
+<thead>
+    <tr>
+    <th>Student ID</th>
+    <th>Event</th>
+    <th>Detail</th>
+    <th>Time</th>
+    </tr>
+</thead>
+<tbody id="logTable"></tbody>
+</table>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="admin.js"></script>
+
+</body>
+</html>
