@@ -12,11 +12,32 @@ const io = new Server(server, {
     cors: { origin: "*" }
 });
 
+// ==========================================
+// 1. SET ADMIN CREDENTIALS
+// ==========================================
+const ADMIN_USER = "admin";
+const ADMIN_PASS = "admin123";
+
 app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
 
 mongoose.connect("mongodb://127.0.0.1:27017/cbt_logs");
+
+// ==========================================
+// 2. AUTHENTICATION MIDDLEWARE
+// ==========================================
+const authenticate = (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    // We expect the token to be: "Bearer " + base64(username:password)
+    const validToken = Buffer.from(ADMIN_USER + ":" + ADMIN_PASS).toString('base64');
+
+    if (authHeader === "Bearer " + validToken) {
+        next(); // Password is correct, let them see the data
+    } else {
+        res.status(401).json({ error: "Unauthorized" });
+    }
+};
 
 io.on("connection", (socket) => {
     console.log("Admin connected:", socket.id);
@@ -26,7 +47,22 @@ io.on("connection", (socket) => {
     });
 });
 
-/* API endpoint called by extension */
+// ==========================================
+// 3. LOGIN ENDPOINT
+// ==========================================
+app.post("/api/login", (req, res) => {
+    const { username, password } = req.body;
+
+    if (username === ADMIN_USER && password === ADMIN_PASS) {
+        // Create the token to send back to frontend
+        const token = Buffer.from(username + ":" + password).toString('base64');
+        res.json({ success: true, token: token });
+    } else {
+        res.status(401).json({ success: false, message: "Invalid credentials" });
+    }
+});
+
+/* API endpoint called by extension (Kept Public) */
 app.post("/api/report", async (req, res) => {
     const { studentId, eventType, detail, timestamp } = req.body;
 
@@ -48,7 +84,6 @@ app.post("/api/report", async (req, res) => {
         eventType,
         detail,
         time: timestamp,
-        // Add database ID if useful for frontend, but not strictly necessary for display
         _id: log._id 
     };
 
@@ -59,8 +94,11 @@ app.post("/api/report", async (req, res) => {
     res.send("Logged");
 });
 
-/* NEW: API endpoint to fetch historical logs */
-app.get("/api/logs", async (req, res) => {
+/* API endpoint to fetch historical logs */
+// ==========================================
+// 4. PROTECT THIS ROUTE
+// ==========================================
+app.get("/api/logs", authenticate, async (req, res) => {
     try {
         // Fetch logs sorted by newest first
         const logs = await ViolationLog.find().sort({ serverTimestamp: -1 });

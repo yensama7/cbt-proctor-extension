@@ -1,27 +1,86 @@
 const socket = io();
 const tableBody = document.getElementById("logTable");
 
-// Inputs
+// UI Elements
+const loginScreen = document.getElementById("login-screen");
+const dashboardScreen = document.getElementById("dashboard-screen");
+const loginError = document.getElementById("login-error");
+
+// Filters
 const filterStudentInput = document.getElementById("filterStudent");
 const filterStartInput = document.getElementById("filterStart");
 const filterEndInput = document.getElementById("filterEnd");
 
-// Store all logs in memory to filter them easily
 let allLogs = [];
+let authToken = localStorage.getItem("adminToken");
 
-// 1. Fetch existing logs when page loads
+// ==========================================
+// 🔐 AUTHENTICATION LOGIC
+// ==========================================
+
+// Check if already logged in on load
+if (authToken) {
+    showDashboard();
+}
+
+async function login() {
+    const user = document.getElementById("username").value;
+    const pass = document.getElementById("password").value;
+
+    try {
+        const res = await fetch("/api/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username: user, password: pass })
+        });
+
+        const data = await res.json();
+
+        if (data.success) {
+            authToken = data.token;
+            localStorage.setItem("adminToken", authToken);
+            showDashboard();
+        } else {
+            loginError.textContent = "Invalid Credentials";
+        }
+    } catch (err) {
+        loginError.textContent = "Server Error";
+    }
+}
+
+function logout() {
+    localStorage.removeItem("adminToken");
+    location.reload();
+}
+
+function showDashboard() {
+    loginScreen.style.display = "none";
+    dashboardScreen.style.display = "block";
+    fetchLogs(); // Load data only after login
+}
+
+// ==========================================
+// 📊 DASHBOARD LOGIC
+// ==========================================
+
 async function fetchLogs() {
     try {
-        const res = await fetch('/api/logs');
+        const res = await fetch('/api/logs', {
+            headers: { "Authorization": "Bearer " + authToken }
+        });
+
+        if (res.status === 401) {
+            logout(); // Token expired or invalid
+            return;
+        }
+
         const logs = await res.json();
         
-        // Map database format to frontend format if necessary
-        // The endpoint returns full mongo objects
         allLogs = logs.map(log => ({
             studentId: log.studentId,
             eventType: log.eventType,
             detail: log.detail,
-            time: log.clientTimestamp || log.serverTimestamp // Fallback to server time
+            time: log.clientTimestamp || log.serverTimestamp
         }));
 
         renderLogs();
@@ -30,15 +89,13 @@ async function fetchLogs() {
     }
 }
 
-// 2. Render logs based on current filters
 function renderLogs() {
-    tableBody.innerHTML = ""; // Clear current table
+    tableBody.innerHTML = ""; 
 
     const studentQuery = filterStudentInput.value.toLowerCase();
     const startTime = filterStartInput.value ? new Date(filterStartInput.value).getTime() : 0;
     const endTime = filterEndInput.value ? new Date(filterEndInput.value).getTime() : Infinity;
 
-    // Filter logs
     const filtered = allLogs.filter(log => {
         const logTime = new Date(log.time).getTime();
         const matchesId = log.studentId.toLowerCase().includes(studentQuery);
@@ -46,7 +103,6 @@ function renderLogs() {
         return matchesId && matchesTime;
     });
 
-    // Create HTML elements
     filtered.forEach(log => {
         const row = document.createElement("tr");
         row.innerHTML = `
@@ -59,22 +115,21 @@ function renderLogs() {
     });
 }
 
-// Helper to style event types
 function getEventClass(type) {
-    if (type.includes("tab_switch")) return "warning";
-    if (type.includes("copy_paste")) return "danger";
+    if (type.includes("tab_switch") || type.includes("PAGE_HIDDEN")) return "warning";
+    if (type.includes("copy") || type.includes("paste")) return "danger";
     return "info";
 }
 
-// 3. Listen for real-time updates
 socket.on("new_violation", (data) => {
-    // Add new log to the beginning of our array
-    allLogs.unshift(data);
-    // Re-render to show the new log (if it matches filters)
-    renderLogs();
+    // Only update if logged in
+    if(dashboardScreen.style.display !== "none") {
+        allLogs.unshift(data);
+        renderLogs();
+    }
 });
 
-// 4. Filter Event Listeners
+// Event Listeners
 filterStudentInput.addEventListener("input", renderLogs);
 filterStartInput.addEventListener("change", renderLogs);
 filterEndInput.addEventListener("change", renderLogs);
@@ -85,6 +140,3 @@ function clearFilters() {
     filterEndInput.value = "";
     renderLogs();
 }
-
-// Initial fetch
-fetchLogs();
