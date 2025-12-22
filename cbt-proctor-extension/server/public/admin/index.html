@@ -3,25 +3,51 @@
 <head>
     <title>CBT Admin Dashboard</title>
     <link rel="stylesheet" href="admin.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 </head>
 <body>
 
-<h2>Live Malpractice Alerts</h2>
+    <div class="container">
+        <header>
+            <h2><i class="fas fa-shield-alt"></i> Live Malpractice Monitor</h2>
+        </header>
 
-<table>
-<thead>
-    <tr>
-    <th>Student ID</th>
-    <th>Event</th>
-    <th>Detail</th>
-    <th>Time</th>
-    </tr>
-</thead>
-<tbody id="logTable"></tbody>
-</table>
+        <div class="controls">
+            <div class="filter-group">
+                <label>Student ID:</label>
+                <input type="text" id="filterStudent" placeholder="Search ID...">
+            </div>
+            
+            <div class="filter-group">
+                <label>Start Time:</label>
+                <input type="datetime-local" id="filterStart">
+            </div>
 
-<script src="/socket.io/socket.io.js"></script>
-<script src="admin.js"></script>
+            <div class="filter-group">
+                <label>End Time:</label>
+                <input type="datetime-local" id="filterEnd">
+            </div>
+
+            <button onclick="clearFilters()" class="btn-clear">Clear Filters</button>
+        </div>
+
+        <div class="table-wrapper">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Student ID</th>
+                        <th>Event</th>
+                        <th>Detail</th>
+                        <th>Time</th>
+                    </tr>
+                </thead>
+                <tbody id="logTable"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="admin.js"></script>
 
 </body>
 </html>
