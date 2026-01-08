@@ -115,7 +115,10 @@ function renderLogs() {
     });
 }
 
+// Helper to style event types
 function getEventClass(type) {
+    if (type === "EXAM_SUBMITTED") return "success"; // <--- NEW GREEN BADGE
+    if (type === "CRITICAL_DISCONNECT") return "danger";
     if (type.includes("tab_switch") || type.includes("PAGE_HIDDEN")) return "warning";
     if (type.includes("copy") || type.includes("paste")) return "danger";
     return "info";

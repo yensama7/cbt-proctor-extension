@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>CBT Exam Paper</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; background-color: #f4f6f9; }
+        
+        /* Header Styling */
+        .header { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            border-bottom: 2px solid #ddd; 
+            padding-bottom: 20px; 
+            margin-bottom: 30px; 
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+
+        h2 { margin: 0; color: #333; }
+
+        .user-info { display: flex; align-items: center; gap: 15px; }
+
+        .badge { 
+            background: #007bff; 
+            color: white; 
+            padding: 8px 12px; 
+            border-radius: 20px; 
+            font-weight: bold; 
+            font-size: 0.9rem;
+        }
+
+        /* Logout Button */
+        .btn-logout {
+            background-color: #dc3545;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+
+        .btn-logout:hover { background-color: #c82333; }
+
+        /* Questions */
+        .question { background: white; padding: 25px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        label { display: block; margin: 10px 0; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h2>GST 101: Use of English</h2>
+        <div class="user-info">
+            <div>Student: <span id="displayMatric" class="badge">Loading...</span></div>
+            <button onclick="logout()" class="btn-logout">Logout</button>
+        </div>
+    </div>
+
+    <div class="question">
+        <p><strong>Question 1:</strong> Which of the following is a noun?</p>
+        <label><input type="radio" name="q1"> Run</label>
+        <label><input type="radio" name="q1"> Quickly</label>
+        <label><input type="radio" name="q1"> Table</label>
+        <label><input type="radio" name="q1"> Blue</label>
+    </div>
+
+    <div class="question">
+        <p><strong>Question 2:</strong> What is the capital of Nigeria?</p>
+        <label><input type="radio" name="q2"> Lagos</label>
+        <label><input type="radio" name="q2"> Abuja</label>
+        <label><input type="radio" name="q2"> Kano</label>
+    </div>
+
+    <script>
+        // 1. Check Login Status
+        const matric = sessionStorage.getItem("cbt_student_id");
+        if(matric) {
+            document.getElementById("displayMatric").innerText = matric;
+        } else {
+            window.location.href = "login.html"; 
+        }
+
+        // 2. Logout Logic
+        function logout() {
+            if(!confirm("Are you sure you want to submit and logout?")) return;
+
+            const matric = sessionStorage.getItem("cbt_student_id");
+
+            // A. Tell Server to stop tracking (Using keepalive to survive redirect)
+            if (matric) {
+                fetch("/api/logout", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ studentId: matric }),
+                    keepalive: true // ⚡ CRITICAL FIX: Ensures server gets the msg
+                }).catch(e => console.error("Logout error:", e));
+            }
+
+            // B. Tell Extension Background Worker to Forget Us
+            // (We try-catch in case extension is disabled/not installed)
+            try {
+                if (typeof chrome !== "undefined" && chrome.runtime) {
+                    chrome.runtime.sendMessage({ type: "RESET_STATE" });
+                }
+            } catch (e) { console.log("Extension not active"); }
+
+            // C. Clear Local Session
+            sessionStorage.removeItem("cbt_student_id");
+            
+            // D. Redirect
+            window.location.href = "login.html";
+        }
+    </script>
+</body>
+</html>

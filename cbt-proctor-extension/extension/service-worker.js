@@ -1,70 +1,78 @@
 const SERVER_URL = "http://localhost:3000/api/report";
-const EXAM_DOMAIN = "exam-portal.com";
 
-/* Utility: send violation to server */
-async function sendViolation(eventType, detail) {
-const data = await chrome.storage.local.get(["studentId"]);
+// ALLOWED DOMAINS (Whitelist)
+// We allow localhost, 127.0.0.1, and the exam portal
+const ALLOWED_DOMAINS = ["localhost", "127.0.0.1", "exam-portal.com"];
 
-const payload = {
-    studentId: data.studentId || "UNKNOWN",
-    eventType,
-    detail,
-    timestamp: new Date().toISOString()
-};
-
-fetch(SERVER_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-}).catch(err => {
-    console.error("Failed to send violation:", err);
-});
+/* Utility: Check if URL is allowed */
+function isUrlAllowed(url) {
+    if (!url) return false;
+    return ALLOWED_DOMAINS.some(domain => url.includes(domain));
 }
 
-/* Store session data on install (example) */
-chrome.runtime.onInstalled.addListener(() => {
-chrome.storage.local.set({
-    studentId: "U23CYS1008"
-});
-});
+/* Utility: send violation */
+async function sendViolation(eventType, detail, providedId = null) {
+    const data = await chrome.storage.local.get(["studentId"]);
+    const finalId = providedId || data.studentId;
 
-/* 1. TAB SWITCHING DETECTION */
+    // ❌ STRICT FIX: If we have NO ID, strictly STOP.
+    if (!finalId || finalId === "Unknown" || finalId === "undefined") {
+        console.log("Skipping report: No valid Student ID found.");
+        return;
+    }
+
+    const payload = {
+        studentId: finalId,
+        eventType,
+        detail,
+        timestamp: new Date().toISOString()
+    };
+
+    fetch(SERVER_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+    }).catch(err => console.error("Send failed:", err));
+}
+/* 1. TAB SWITCHING */
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
-try {
-    const tab = await chrome.tabs.get(activeInfo.tabId);
+    try {
+        const tab = await chrome.tabs.get(activeInfo.tabId);
+        if (!tab.url) return;
 
-    if (!tab.url) return;
-
-    if (!tab.url.includes(EXAM_DOMAIN)) {
-        sendViolation("TAB_SWITCH", tab.url);
-    }
-} catch (err) {
-    console.error("Tab switch error:", err);
-}
+        if (!isUrlAllowed(tab.url)) {
+            sendViolation("TAB_SWITCH", "Switched to: " + tab.url);
+        }
+    } catch (err) {}
 });
 
-/* 2. URL CHANGE DETECTION (NEW NAVIGATION) */
+/* 2. URL CHANGE */
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-if (changeInfo.status === "complete" && tab.url) {
-    if (!tab.url.includes(EXAM_DOMAIN)) {
-        sendViolation("UNAUTHORIZED_NAVIGATION", tab.url);
+    if (changeInfo.status === "complete" && tab.url) {
+        if (!isUrlAllowed(tab.url)) {
+            sendViolation("UNAUTHORIZED_NAVIGATION", "Navigated to: " + tab.url);
+        }
     }
-}
 });
 
-/* 3. BROWSER OUT-OF-FOCUS / MINIMIZED */
+/* 3. WINDOW FOCUS */
 chrome.windows.onFocusChanged.addListener((windowId) => {
-if (windowId === chrome.windows.WINDOW_ID_NONE) {
-    sendViolation(
-        "BROWSER_OUT_OF_FOCUS",
-        "Chrome window minimized or another application opened"
-    );
-}
+    if (windowId === chrome.windows.WINDOW_ID_NONE) {
+        sendViolation("BROWSER_OUT_OF_FOCUS", "Minimized Chrome");
+    }
 });
 
-/* 4. RECEIVE VISIBILITY EVENTS FROM CONTENT SCRIPT */
+/* 4. RECEIVE MESSAGES */
 chrome.runtime.onMessage.addListener((message) => {
-    if (message.type === "PAGE_HIDDEN") {
-        sendViolation("PAGE_HIDDEN", message.detail);
-}
+    
+    // ⚡ NEW: Handle Logout Reset Immediately
+    if (message.type === "RESET_STATE") {
+        chrome.storage.local.remove("studentId");
+        console.log("🧹 Session Cleared: ID removed from storage.");
+        return; 
+    }
+
+    if (message.type) {
+        sendViolation(message.type, message.detail, message.studentId);
+    }
 });
