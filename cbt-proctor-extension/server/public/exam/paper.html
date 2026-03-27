@@ -82,6 +82,14 @@
         const matric = sessionStorage.getItem("cbt_student_id");
         if(matric) {
             document.getElementById("displayMatric").innerText = matric;
+
+            // Mark session as active immediately (covers extension-off scenario).
+            fetch("/api/exam/start", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ studentId: matric }),
+                keepalive: true
+            }).catch(() => {});
         } else {
             window.location.href = "login.html"; 
         }

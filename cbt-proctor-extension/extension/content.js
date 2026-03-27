@@ -42,7 +42,8 @@ function sendPulse() {
     fetch("http://localhost:3000/api/heartbeat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ studentId: studentId })
+        body: JSON.stringify({ studentId: studentId }),
+        keepalive: true
     }).catch(err => {}); 
 }
 
@@ -60,7 +61,12 @@ function enableProctoring() {
     });
     window.addEventListener("focus", () => { document.body.style.opacity = "1"; });
     document.addEventListener("visibilitychange", () => {
-        if (document.hidden) reportViolation("TAB_SWITCH", "Switched browser tab");
+        if (document.hidden) {
+            reportViolation("WINDOW_HIDDEN", "Tab hidden / Chrome minimized / switched application");
+        }
+    });
+    window.addEventListener("pagehide", () => {
+        reportViolation("PAGE_HIDDEN", "Page hidden or browser closed/minimized");
     });
     ['copy', 'cut', 'paste'].forEach(action => {
         document.addEventListener(action, () => {
