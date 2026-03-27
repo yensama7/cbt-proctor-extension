@@ -51,6 +51,20 @@ const buildTimeRangeQuery = (start, end) => {
     return Object.keys(range).length ? { serverTimestamp: range } : {};
 };
 
+const getLogIsoTime = (log) => {
+    if (log.clientTimestamp) {
+        const clientDate = new Date(log.clientTimestamp);
+        if (!Number.isNaN(clientDate.getTime())) return clientDate.toISOString();
+    }
+
+    if (log.serverTimestamp) {
+        const serverDate = new Date(log.serverTimestamp);
+        if (!Number.isNaN(serverDate.getTime())) return serverDate.toISOString();
+    }
+
+    return new Date().toISOString();
+};
+
 io.on("connection", (socket) => {
     console.log("Client connected:", socket.id);
 });
@@ -163,34 +177,44 @@ app.post("/api/report", async (req, res) => {
 });
 
 app.get("/api/logs", authenticate, async (req, res) => {
-    const { start, end } = req.query;
-    const query = buildTimeRangeQuery(start, end);
-    const logs = await ViolationLog.find(query).sort({ serverTimestamp: -1 });
-    res.json(logs);
+    try {
+        const { start, end } = req.query;
+        const query = buildTimeRangeQuery(start, end);
+        const logs = await ViolationLog.find(query).sort({ serverTimestamp: -1 });
+        res.json(logs);
+    } catch (err) {
+        console.error("Failed to fetch logs", err);
+        res.status(500).json({ error: "Failed to fetch logs" });
+    }
 });
 
 app.get("/api/logs/export", authenticate, async (req, res) => {
-    const { start, end } = req.query;
-    const query = buildTimeRangeQuery(start, end);
-    const logs = await ViolationLog.find(query).sort({ serverTimestamp: -1 });
+    try {
+        const { start, end } = req.query;
+        const query = buildTimeRangeQuery(start, end);
+        const logs = await ViolationLog.find(query).sort({ serverTimestamp: -1 });
 
-    const escapeCsv = (value) => {
-        const text = value == null ? "" : String(value);
-        return `"${text.replace(/"/g, '""')}"`;
-    };
+        const escapeCsv = (value) => {
+            const text = value == null ? "" : String(value);
+            return `"${text.replace(/"/g, '""')}"`;
+        };
 
-    const headers = ["Student ID", "Event", "Detail", "Time"];
-    const rows = logs.map(log => [
-        escapeCsv(log.studentId),
-        escapeCsv(log.eventType),
-        escapeCsv(log.detail),
-        escapeCsv((log.clientTimestamp || log.serverTimestamp).toISOString())
-    ].join(","));
+        const headers = ["Student ID", "Event", "Detail", "Time"];
+        const rows = logs.map(log => [
+            escapeCsv(log.studentId),
+            escapeCsv(log.eventType),
+            escapeCsv(log.detail),
+            escapeCsv(getLogIsoTime(log))
+        ].join(","));
 
-    const csv = [headers.join(","), ...rows].join("\n");
-    res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    res.setHeader("Content-Disposition", "attachment; filename=cbt-logs.csv");
-    res.send(csv);
+        const csv = [headers.join(","), ...rows].join("\n");
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", "attachment; filename=cbt-logs.csv");
+        res.send(csv);
+    } catch (err) {
+        console.error("Failed to export logs", err);
+        res.status(500).json({ error: "Failed to export logs" });
+    }
 });
 
 server.listen(3000, () => console.log("🚀 Server running on http://localhost:3000"));

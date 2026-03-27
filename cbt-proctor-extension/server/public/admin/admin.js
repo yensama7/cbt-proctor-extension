@@ -190,10 +190,16 @@ function toCsv(logs) {
         escapeCsv(log.studentId),
         escapeCsv(log.eventType),
         escapeCsv(log.detail),
-        escapeCsv(new Date(log.time).toISOString())
+        escapeCsv(toIsoOrRaw(log.time))
     ]).join(","));
 
     return [headers.join(","), ...rows].join("\n");
+}
+
+function toIsoOrRaw(value) {
+    const date = new Date(value);
+    if (!Number.isNaN(date.getTime())) return date.toISOString();
+    return value == null ? "" : String(value);
 }
 
 function escapeCsv(value) {
