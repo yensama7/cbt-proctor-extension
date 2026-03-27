@@ -69,17 +69,23 @@ function reportViolation(type, detail) {
 // 4. PROCTORING LOGIC
 function enableProctoring() {
     window.addEventListener("blur", () => {
-        reportViolation("WINDOW_FOCUS_LOST", "Switched application");
+        reportViolation("WINDOW_FOCUS_LOST", "Switched application", true);
         document.body.style.opacity = "0.5"; 
     });
     window.addEventListener("focus", () => { document.body.style.opacity = "1"; });
     document.addEventListener("visibilitychange", () => {
         if (document.hidden) {
+            reportViolation("WINDOW_HIDDEN", "Tab hidden / Chrome minimized / switched application", true);
+        }
+    });
+    window.addEventListener("pagehide", () => {
+        reportViolation("PAGE_HIDDEN", "Page hidden or browser closed/minimized", true);
             reportViolation("WINDOW_HIDDEN", "Tab hidden / Chrome minimized / switched application");
         }
     });
     window.addEventListener("pagehide", () => {
         reportViolation("PAGE_HIDDEN", "Page hidden or browser closed/minimized");
+
     });
     ['copy', 'cut', 'paste'].forEach(action => {
         document.addEventListener(action, () => {
