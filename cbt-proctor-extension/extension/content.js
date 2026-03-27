@@ -48,25 +48,53 @@ function sendPulse() {
 }
 
 // 3. REPORT VIOLATION HELPER
-async function reportViolation(type, detail) {
-    if (studentId === "Unknown") return; 
-    chrome.runtime.sendMessage({ type: type, studentId: studentId, detail: detail });
+function reportViolation(type, detail, preferBeacon = false) {
+    if (studentId === "Unknown") return;
+
+    const payload = JSON.stringify({
+        studentId,
+        eventType: type,
+        detail,
+        timestamp: new Date().toISOString()
+    });
+
+    // For page-hidden/minimize transitions, sendBeacon is more reliable.
+    if (preferBeacon && navigator.sendBeacon) {
+        const blob = new Blob([payload], { type: "application/json" });
+        navigator.sendBeacon("http://localhost:3000/api/report", blob);
+        return;
+    }
+
+    fetch("http://localhost:3000/api/report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+        keepalive: true
+    }).catch(() => {});
 }
 
 // 4. PROCTORING LOGIC
 function enableProctoring() {
     window.addEventListener("blur", () => {
-        reportViolation("WINDOW_FOCUS_LOST", "Switched application");
+        reportViolation("WINDOW_FOCUS_LOST", "Switched application", true);
         document.body.style.opacity = "0.5"; 
     });
     window.addEventListener("focus", () => { document.body.style.opacity = "1"; });
     document.addEventListener("visibilitychange", () => {
         if (document.hidden) {
+<<<<<<< codex/add-export-data-button-with-date-filter-vrmt6r
+            reportViolation("WINDOW_HIDDEN", "Tab hidden / Chrome minimized / switched application", true);
+        }
+    });
+    window.addEventListener("pagehide", () => {
+        reportViolation("PAGE_HIDDEN", "Page hidden or browser closed/minimized", true);
+=======
             reportViolation("WINDOW_HIDDEN", "Tab hidden / Chrome minimized / switched application");
         }
     });
     window.addEventListener("pagehide", () => {
         reportViolation("PAGE_HIDDEN", "Page hidden or browser closed/minimized");
+>>>>>>> main
     });
     ['copy', 'cut', 'paste'].forEach(action => {
         document.addEventListener(action, () => {
