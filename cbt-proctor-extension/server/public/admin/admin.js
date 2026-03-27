@@ -91,19 +91,10 @@ async function fetchLogs() {
 
 function renderLogs() {
     tableBody.innerHTML = ""; 
+    const filteredLogs = getFilteredLogs();
+    const fragment = document.createDocumentFragment();
 
-    const studentQuery = filterStudentInput.value.toLowerCase();
-    const startTime = filterStartInput.value ? new Date(filterStartInput.value).getTime() : 0;
-    const endTime = filterEndInput.value ? new Date(filterEndInput.value).getTime() : Infinity;
-
-    const filtered = allLogs.filter(log => {
-        const logTime = new Date(log.time).getTime();
-        const matchesId = log.studentId.toLowerCase().includes(studentQuery);
-        const matchesTime = logTime >= startTime && logTime <= endTime;
-        return matchesId && matchesTime;
-    });
-
-    filtered.forEach(log => {
+    filteredLogs.forEach(log => {
         const row = document.createElement("tr");
         row.innerHTML = `
             <td><span class="badge-id">${log.studentId}</span></td>
@@ -111,7 +102,22 @@ function renderLogs() {
             <td>${log.detail}</td>
             <td class="time-cell">${new Date(log.time).toLocaleString()}</td>
         `;
-        tableBody.appendChild(row);
+        fragment.appendChild(row);
+    });
+
+    tableBody.appendChild(fragment);
+}
+
+function getFilteredLogs() {
+    const studentQuery = filterStudentInput.value.trim().toLowerCase();
+    const startTime = filterStartInput.value ? new Date(filterStartInput.value).getTime() : 0;
+    const endTime = filterEndInput.value ? new Date(filterEndInput.value).getTime() : Infinity;
+
+    return allLogs.filter(log => {
+        const logTime = new Date(log.time).getTime();
+        const matchesId = log.studentId.toLowerCase().includes(studentQuery);
+        const matchesTime = logTime >= startTime && logTime <= endTime;
+        return matchesId && matchesTime;
     });
 }
 
@@ -142,4 +148,70 @@ function clearFilters() {
     filterStartInput.value = "";
     filterEndInput.value = "";
     renderLogs();
+}
+
+async function exportFilteredCsv() {
+    const params = new URLSearchParams();
+    if (filterStartInput.value) params.set("start", new Date(filterStartInput.value).toISOString());
+    if (filterEndInput.value) params.set("end", new Date(filterEndInput.value).toISOString());
+
+    const hasStudentFilter = filterStudentInput.value.trim().length > 0;
+
+    try {
+        if (hasStudentFilter) {
+            // Student ID filtering is client-side for partial matching.
+            const csvContent = toCsv(getFilteredLogs());
+            downloadCsv(csvContent);
+            return;
+        }
+
+        const url = params.toString() ? `/api/logs/export?${params.toString()}` : "/api/logs/export";
+        const res = await fetch(url, {
+            headers: { "Authorization": "Bearer " + authToken }
+        });
+
+        if (res.status === 401) {
+            logout();
+            return;
+        }
+        if (!res.ok) throw new Error("Failed to export logs");
+
+        const csvContent = await res.text();
+        downloadCsv(csvContent);
+    } catch (err) {
+        console.error("CSV export failed", err);
+        alert("Failed to export CSV. Please try again.");
+    }
+}
+
+function toCsv(logs) {
+    const headers = ["Student ID", "Event", "Detail", "Time"];
+    const rows = logs.map(log => ([
+        escapeCsv(log.studentId),
+        escapeCsv(log.eventType),
+        escapeCsv(log.detail),
+        escapeCsv(new Date(log.time).toISOString())
+    ]).join(","));
+
+    return [headers.join(","), ...rows].join("\n");
+}
+
+function escapeCsv(value) {
+    const text = value == null ? "" : String(value);
+    return `"${text.replace(/"/g, '""')}"`;
+}
+
+function downloadCsv(csvContent) {
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const downloadLink = document.createElement("a");
+    const start = filterStartInput.value ? new Date(filterStartInput.value).toISOString().slice(0, 10) : "all";
+    const end = filterEndInput.value ? new Date(filterEndInput.value).toISOString().slice(0, 10) : "all";
+    const fileName = `cbt-logs-${start}-to-${end}.csv`;
+
+    downloadLink.href = URL.createObjectURL(blob);
+    downloadLink.download = fileName;
+    document.body.appendChild(downloadLink);
+    downloadLink.click();
+    document.body.removeChild(downloadLink);
+    URL.revokeObjectURL(downloadLink.href);
 }
