@@ -82,11 +82,19 @@ function enableProctoring() {
     window.addEventListener("focus", () => { document.body.style.opacity = "1"; });
     document.addEventListener("visibilitychange", () => {
         if (document.hidden) {
+<<<<<<< codex/add-export-data-button-with-date-filter-vrmt6r
             reportViolation("WINDOW_HIDDEN", "Tab hidden / Chrome minimized / switched application", true);
         }
     });
     window.addEventListener("pagehide", () => {
         reportViolation("PAGE_HIDDEN", "Page hidden or browser closed/minimized", true);
+=======
+            reportViolation("WINDOW_HIDDEN", "Tab hidden / Chrome minimized / switched application");
+        }
+    });
+    window.addEventListener("pagehide", () => {
+        reportViolation("PAGE_HIDDEN", "Page hidden or browser closed/minimized");
+>>>>>>> main
     });
     ['copy', 'cut', 'paste'].forEach(action => {
         document.addEventListener(action, () => {
