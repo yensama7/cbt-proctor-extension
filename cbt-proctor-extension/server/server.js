@@ -70,20 +70,35 @@ io.on("connection", (socket) => {
 });
 
 // --- HEARTBEAT CHECKER (Runs every 10 seconds) ---
-setInterval(() => {
+setInterval(async () => {
     const now = Date.now();
     for (const [studentId, lastSeen] of Object.entries(activeSessions)) {
         if (now - lastSeen > HEARTBEAT_TIMEOUT) {
             
             // Only alert if we actually knew the student ID
             if (studentId && studentId !== "Unknown") {
+                const disconnectTime = new Date().toISOString();
                 const alert = {
                     studentId,
                     eventType: "CRITICAL_DISCONNECT",
                     detail: "Signal lost. Network failed or Extension disabled.",
-                    time: new Date().toISOString()
+                    time: disconnectTime
                 };
                 console.log(`[❌ DISCONNECT] ${studentId}`);
+
+                try {
+                    const disconnectLog = new ViolationLog({
+                        studentId,
+                        eventType: "CRITICAL_DISCONNECT",
+                        detail: "Signal lost. Network failed or Extension disabled.",
+                        clientTimestamp: disconnectTime
+                    });
+                    await disconnectLog.save();
+                    alert._id = disconnectLog._id;
+                } catch (err) {
+                    console.error("Failed to persist disconnect log", err);
+                }
+
                 io.emit("new_violation", alert);
             }
 
@@ -105,6 +120,16 @@ app.post("/api/heartbeat", (req, res) => {
     } else {
         res.sendStatus(200); // Just say OK, but don't track
     }
+});
+
+app.post("/api/exam/start", (req, res) => {
+    const { studentId } = req.body;
+
+    if (studentId && studentId !== "Unknown") {
+        activeSessions[studentId] = Date.now();
+    }
+
+    res.sendStatus(200);
 });
 
 // LOGOUT ENDPOINT (Now logs the event to Admin)
