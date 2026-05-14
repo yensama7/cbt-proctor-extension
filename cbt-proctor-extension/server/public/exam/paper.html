@@ -1,129 +1,451 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>CBT Exam Paper</title>
-    <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; max-width: 800px; margin: 0 auto; background-color: #f4f6f9; }
-        
-        /* Header Styling */
-        .header { 
-            display: flex; 
-            justify-content: space-between; 
-            align-items: center; 
-            border-bottom: 2px solid #ddd; 
-            padding-bottom: 20px; 
-            margin-bottom: 30px; 
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-        }
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CBT — Exam in Progress</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;800&family=Lora:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-        h2 { margin: 0; color: #333; }
+  :root {
+    --bg:       #f5f4f0;
+    --surface:  #ffffff;
+    --border:   #e0ddd5;
+    --accent:   #1a3a2a;
+    --red:      #c0392b;
+    --text:     #1c1c1c;
+    --muted:    #7a7a7a;
+    --warning:  #e67e22;
+  }
 
-        .user-info { display: flex; align-items: center; gap: 15px; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Lora', serif;
+    min-height: 100vh;
+  }
 
-        .badge { 
-            background: #007bff; 
-            color: white; 
-            padding: 8px 12px; 
-            border-radius: 20px; 
-            font-weight: bold; 
-            font-size: 0.9rem;
-        }
+  /* HEADER BAR */
+  .header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: var(--accent);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 32px;
+    height: 56px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+  }
+  .header-left { display: flex; align-items: center; gap: 16px; }
+  .header-title { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 15px; letter-spacing: 0.04em; }
+  .student-badge {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    background: rgba(255,255,255,0.12);
+    padding: 4px 10px;
+    border-radius: 100px;
+  }
 
-        /* Logout Button */
-        .btn-logout {
-            background-color: #dc3545;
-            color: white;
-            border: none;
-            padding: 8px 15px;
-            border-radius: 5px;
-            cursor: pointer;
-            font-weight: bold;
-            transition: background 0.2s;
-        }
+  .timer {
+    font-family: 'DM Mono', monospace;
+    font-size: 22px;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    color: #fff;
+    transition: color 0.3s;
+  }
+  .timer.warning { color: #ffd166; }
+  .timer.danger  { color: #ff6b6b; animation: timerPulse 1s infinite; }
+  @keyframes timerPulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
 
-        .btn-logout:hover { background-color: #c82333; }
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #4caf50;
+    animation: pulse 2s infinite;
+    display: inline-block;
+    margin-right: 6px;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 
-        /* Questions */
-        .question { background: white; padding: 25px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
-        label { display: block; margin: 10px 0; cursor: pointer; }
-    </style>
+  /* BLUR OVERLAY */
+  #blurOverlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    backdrop-filter: blur(8px);
+    z-index: 200;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 12px;
+    color: #fff;
+    font-family: 'Syne', sans-serif;
+  }
+  #blurOverlay.show { display: flex; }
+  #blurOverlay h2  { font-size: 24px; font-weight: 800; }
+  #blurOverlay p   { font-size: 14px; color: rgba(255,255,255,0.6); font-family: 'DM Mono', monospace; }
+
+  /* MAIN LAYOUT */
+  .main {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+  }
+
+  .exam-header {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 32px;
+    margin-bottom: 32px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  }
+  .exam-title { font-size: 22px; font-weight: 500; margin-bottom: 6px; }
+  .exam-meta  { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted); }
+  .exam-meta span { color: var(--text); font-weight: 500; }
+  .progress-ring { text-align: right; }
+  .progress-label { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted); }
+  .progress-val   { font-family: 'Syne', sans-serif; font-size: 28px; font-weight: 800; color: var(--accent); }
+
+  /* QUESTIONS */
+  .question-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 32px;
+    margin-bottom: 20px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+    transition: box-shadow 0.2s;
+  }
+  .question-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.08); }
+
+  .question-num {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  .question-text {
+    font-size: 16px;
+    line-height: 1.65;
+    margin-bottom: 20px;
+    color: var(--text);
+  }
+
+  .options { display: flex; flex-direction: column; gap: 10px; }
+
+  .option {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.15s;
+    user-select: none;
+  }
+  .option:hover { border-color: var(--accent); background: rgba(26,58,42,0.03); }
+  .option.selected { border-color: var(--accent); background: rgba(26,58,42,0.06); }
+
+  .option input[type="radio"] { accent-color: var(--accent); width: 16px; height: 16px; flex-shrink: 0; }
+  .option label { cursor: pointer; font-size: 14px; line-height: 1.5; }
+
+  /* SUBMIT */
+  .submit-bar {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 16px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    z-index: 50;
+    box-shadow: 0 -4px 20px rgba(0,0,0,0.06);
+  }
+
+  .answered-count { font-family: 'DM Mono', monospace; font-size: 12px; color: var(--muted); }
+
+  .btn-submit {
+    padding: 12px 32px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-family: 'Syne', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: opacity 0.2s;
+    text-transform: uppercase;
+  }
+  .btn-submit:hover { opacity: 0.85; }
+
+  /* MODAL */
+  .modal-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 300;
+    align-items: center;
+    justify-content: center;
+  }
+  .modal-backdrop.show { display: flex; }
+  .modal {
+    background: var(--surface);
+    border-radius: 16px;
+    padding: 40px;
+    max-width: 420px;
+    width: 90%;
+    text-align: center;
+    box-shadow: 0 24px 64px rgba(0,0,0,0.2);
+    animation: popIn 0.3s cubic-bezier(0.16,1,0.3,1) both;
+  }
+  @keyframes popIn { from{opacity:0;transform:scale(0.9)} to{opacity:1;transform:scale(1)} }
+  .modal h2 { font-size: 22px; margin-bottom: 10px; }
+  .modal p  { color: var(--muted); font-size: 14px; font-family: 'DM Mono', monospace; line-height: 1.6; margin-bottom: 28px; }
+  .modal-btns { display: flex; gap: 12px; justify-content: center; }
+  .btn-cancel {
+    padding: 11px 24px;
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    background: none;
+    font-family: 'Syne', sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    color: var(--text);
+  }
+  .btn-confirm {
+    padding: 11px 24px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-family: 'Syne', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+</style>
 </head>
 <body>
 
-    <div class="header">
-        <h2>GST 101: Use of English</h2>
-        <div class="user-info">
-            <div>Student: <span id="displayMatric" class="badge">Loading...</span></div>
-            <button onclick="logout()" class="btn-logout">Logout</button>
-        </div>
+<!-- BLUR overlay when focus lost -->
+<div id="blurOverlay">
+  <h2>⚠ Return to Exam</h2>
+  <p>Leaving the exam window has been flagged.</p>
+</div>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="header-left">
+    <div class="status-dot"></div>
+    <span class="header-title">CBT PROCTOR</span>
+    <span class="student-badge" id="studentBadge">Loading…</span>
+  </div>
+  <div class="timer" id="timer">60:00</div>
+</div>
+
+<!-- MAIN -->
+<div class="main">
+  <div class="exam-header">
+    <div>
+      <div class="exam-title">General Knowledge Assessment</div>
+      <div class="exam-meta">Subject: <span>GNS 101</span> &nbsp;|&nbsp; Duration: <span>60 minutes</span> &nbsp;|&nbsp; Questions: <span>10</span></div>
     </div>
-
-    <div class="question">
-        <p><strong>Question 1:</strong> Which of the following is a noun?</p>
-        <label><input type="radio" name="q1"> Run</label>
-        <label><input type="radio" name="q1"> Quickly</label>
-        <label><input type="radio" name="q1"> Table</label>
-        <label><input type="radio" name="q1"> Blue</label>
+    <div class="progress-ring">
+      <div class="progress-label">Answered</div>
+      <div class="progress-val" id="progressVal">0/10</div>
     </div>
+  </div>
 
-    <div class="question">
-        <p><strong>Question 2:</strong> What is the capital of Nigeria?</p>
-        <label><input type="radio" name="q2"> Lagos</label>
-        <label><input type="radio" name="q2"> Abuja</label>
-        <label><input type="radio" name="q2"> Kano</label>
+  <div id="questionsContainer"></div>
+</div>
+
+<!-- SUBMIT BAR -->
+<div class="submit-bar">
+  <span class="answered-count" id="answeredLabel">0 of 10 questions answered</span>
+  <button class="btn-submit" onclick="showSubmitModal()">Submit Exam</button>
+</div>
+
+<!-- SUBMIT MODAL -->
+<div class="modal-backdrop" id="submitModal">
+  <div class="modal">
+    <h2>Submit Exam?</h2>
+    <p id="submitMsg">You have answered <strong id="answeredCount">0</strong> of 10 questions.<br>This action cannot be undone.</p>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeModal()">Go Back</button>
+      <button class="btn-confirm" onclick="submitExam()">Submit Now</button>
     </div>
+  </div>
+</div>
 
-    <script>
-        // 1. Check Login Status
-        const matric = sessionStorage.getItem("cbt_student_id");
-        if(matric) {
-            document.getElementById("displayMatric").innerText = matric;
+<script>
+// ---------- GUARD ----------
+const studentId = localStorage.getItem("cbt_student_id");
+if (!studentId) { window.location.href = "login.html"; }
+document.getElementById("studentBadge").textContent = studentId;
 
-            // Mark session as active immediately (covers extension-off scenario).
-            fetch("/api/exam/start", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ studentId: matric }),
-                keepalive: true
-            }).catch(() => {});
-        } else {
-            window.location.href = "login.html"; 
-        }
+// ---------- QUESTIONS ----------
+const questions = [
+  {
+    text: "Which planet is known as the Red Planet?",
+    options: ["Venus", "Mars", "Jupiter", "Saturn"],
+    answer: 1
+  },
+  {
+    text: "What is the chemical symbol for Gold?",
+    options: ["Ag", "Fe", "Au", "Cu"],
+    answer: 2
+  },
+  {
+    text: "Who wrote 'Things Fall Apart'?",
+    options: ["Wole Soyinka", "Chimamanda Adichie", "Chinua Achebe", "Ben Okri"],
+    answer: 2
+  },
+  {
+    text: "What is 17 × 13?",
+    options: ["211", "221", "231", "241"],
+    answer: 1
+  },
+  {
+    text: "In what year did Nigeria gain independence?",
+    options: ["1957", "1960", "1963", "1967"],
+    answer: 1
+  },
+  {
+    text: "Which organ produces insulin?",
+    options: ["Liver", "Kidney", "Pancreas", "Spleen"],
+    answer: 2
+  },
+  {
+    text: "What is the speed of light (approximate)?",
+    options: ["300 km/s", "3,000 km/s", "300,000 km/s", "3,000,000 km/s"],
+    answer: 2
+  },
+  {
+    text: "Which data structure uses LIFO order?",
+    options: ["Queue", "Stack", "Tree", "Graph"],
+    answer: 1
+  },
+  {
+    text: "What does HTML stand for?",
+    options: [
+      "Hyper Transfer Markup Language",
+      "High Text Markup Language",
+      "HyperText Markup Language",
+      "HyperText Modern Language"
+    ],
+    answer: 2
+  },
+  {
+    text: "Which of these is NOT a programming language?",
+    options: ["Python", "Cobra", "HTML", "Rust"],
+    answer: 2
+  }
+];
 
-        // 2. Logout Logic
-        function logout() {
-            if(!confirm("Are you sure you want to submit and logout?")) return;
+const answers = new Array(questions.length).fill(null);
 
-            const matric = sessionStorage.getItem("cbt_student_id");
+function renderQuestions() {
+  const container = document.getElementById("questionsContainer");
+  container.innerHTML = questions.map((q, i) => `
+    <div class="question-card">
+      <div class="question-num">Question ${i + 1} of ${questions.length}</div>
+      <div class="question-text">${q.text}</div>
+      <div class="options">
+        ${q.options.map((opt, j) => `
+          <div class="option" id="opt-${i}-${j}" onclick="selectAnswer(${i}, ${j})">
+            <input type="radio" name="q${i}" id="r${i}-${j}" value="${j}" />
+            <label for="r${i}-${j}">${opt}</label>
+          </div>
+        `).join("")}
+      </div>
+    </div>
+  `).join("");
+}
 
-            // A. Tell Server to stop tracking (Using keepalive to survive redirect)
-            if (matric) {
-                fetch("/api/logout", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ studentId: matric }),
-                    keepalive: true // ⚡ CRITICAL FIX: Ensures server gets the msg
-                }).catch(e => console.error("Logout error:", e));
-            }
+function selectAnswer(qIdx, optIdx) {
+  answers[qIdx] = optIdx;
+  // Clear previous selection visually
+  for (let j = 0; j < questions[qIdx].options.length; j++) {
+    document.getElementById(`opt-${qIdx}-${j}`).classList.remove("selected");
+    document.getElementById(`r${qIdx}-${j}`).checked = false;
+  }
+  document.getElementById(`opt-${qIdx}-${optIdx}`).classList.add("selected");
+  document.getElementById(`r${qIdx}-${optIdx}`).checked = true;
+  updateProgress();
+}
 
-            // B. Tell Extension Background Worker to Forget Us
-            // (We try-catch in case extension is disabled/not installed)
-            try {
-                if (typeof chrome !== "undefined" && chrome.runtime) {
-                    chrome.runtime.sendMessage({ type: "RESET_STATE" });
-                }
-            } catch (e) { console.log("Extension not active"); }
+function updateProgress() {
+  const count = answers.filter(a => a !== null).length;
+  document.getElementById("progressVal").textContent   = `${count}/${questions.length}`;
+  document.getElementById("answeredLabel").textContent = `${count} of ${questions.length} questions answered`;
+  document.getElementById("answeredCount").textContent  = count;
+}
 
-            // C. Clear Local Session
-            sessionStorage.removeItem("cbt_student_id");
-            
-            // D. Redirect
-            window.location.href = "login.html";
-        }
-    </script>
+renderQuestions();
+
+// ---------- TIMER ----------
+let secondsLeft = 60 * 60;
+const timerEl   = document.getElementById("timer");
+
+function updateTimer() {
+  const m = Math.floor(secondsLeft / 60).toString().padStart(2, "0");
+  const s = (secondsLeft % 60).toString().padStart(2, "0");
+  timerEl.textContent = `${m}:${s}`;
+  if (secondsLeft <= 300)      timerEl.className = "timer danger";
+  else if (secondsLeft <= 600) timerEl.className = "timer warning";
+  if (secondsLeft <= 0) { clearInterval(timerInterval); submitExam(); }
+  secondsLeft--;
+}
+const timerInterval = setInterval(updateTimer, 1000);
+updateTimer();
+
+// ---------- SUBMIT ----------
+function showSubmitModal() {
+  document.getElementById("submitModal").classList.add("show");
+}
+function closeModal() {
+  document.getElementById("submitModal").classList.remove("show");
+}
+function submitExam() {
+  clearInterval(timerInterval);
+  closeModal();
+  fetch("http://localhost:3000/api/logout", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ studentId })
+  }).finally(() => {
+    localStorage.removeItem("cbt_student_id");
+    localStorage.removeItem("cbt_student_name");
+    window.location.href = "login.html";
+  });
+}
+
+// ---------- BLUR OVERLAY ----------
+window.addEventListener("blur", () => {
+  document.getElementById("blurOverlay").classList.add("show");
+});
+window.addEventListener("focus", () => {
+  document.getElementById("blurOverlay").classList.remove("show");
+});
+</script>
 </body>
 </html>

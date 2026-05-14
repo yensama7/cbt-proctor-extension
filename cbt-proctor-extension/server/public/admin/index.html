@@ -1,73 +1,790 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>CBT Admin Dashboard</title>
-    <link rel="stylesheet" href="admin.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CBT Proctor — Admin Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,400;0,500;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+* , *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:       #070809;
+  --s1:       #0d0f11;
+  --s2:       #111418;
+  --border:   #1c2028;
+  --border2:  #252b35;
+  --accent:   #00e5a0;
+  --blue:     #3b82f6;
+  --yellow:   #f59e0b;
+  --red:      #ef4444;
+  --orange:   #f97316;
+  --green:    #22c55e;
+  --text:     #e2e8f0;
+  --muted:    #4a5568;
+  --muted2:   #718096;
+  --font-mono: 'DM Mono', monospace;
+  --font-sans: 'Syne', sans-serif;
+}
+
+html, body { height: 100%; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ===== LOGIN SCREEN ===== */
+#loginScreen {
+  position: fixed; inset: 0; z-index: 9999;
+  background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+}
+#loginScreen::before {
+  content: '';
+  position: absolute; inset: 0;
+  background: radial-gradient(ellipse at 30% 50%, rgba(0,229,160,0.06) 0%, transparent 60%),
+              radial-gradient(ellipse at 70% 50%, rgba(59,130,246,0.05) 0%, transparent 60%);
+}
+.login-card {
+  position: relative; z-index: 1;
+  width: 380px;
+  background: var(--s1);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 44px 36px;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.02), 0 32px 64px rgba(0,0,0,0.6);
+}
+.login-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--accent);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+  display: flex; align-items: center; gap: 8px;
+}
+.login-eyebrow::before { content:''; width:24px; height:1px; background:var(--accent); }
+.login-title { font-size: 26px; font-weight: 800; margin-bottom: 4px; }
+.login-sub   { font-family: var(--font-mono); font-size: 12px; color: var(--muted2); margin-bottom: 32px; }
+.lf { margin-bottom: 14px; }
+.lf label { display:block; font-family:var(--font-mono); font-size:10px; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted2); margin-bottom:6px; }
+.lf input  { width:100%; background:var(--bg); border:1px solid var(--border); border-radius:7px; padding:10px 12px; color:var(--text); font-family:var(--font-mono); font-size:13px; outline:none; transition:border-color .2s; }
+.lf input:focus { border-color:var(--accent); }
+.login-btn { width:100%; margin-top:20px; padding:12px; background:var(--accent); color:#000; border:none; border-radius:8px; font-family:var(--font-sans); font-size:13px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; cursor:pointer; transition:opacity .2s; }
+.login-btn:hover { opacity:.85; }
+.login-err { margin-top:12px; font-family:var(--font-mono); font-size:11px; color:var(--red); display:none; }
+.login-err.show { display:block; }
+
+/* ===== APP SHELL ===== */
+#app { display: flex; flex-direction: column; height: 100vh; display: none; }
+
+/* TOP BAR */
+.topbar {
+  height: 52px; flex-shrink: 0;
+  background: var(--s1);
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 24px;
+}
+.topbar-left { display: flex; align-items: center; gap: 16px; }
+.logo { font-size: 13px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.logo span { color: var(--accent); }
+.topbar-tag {
+  font-family: var(--font-mono); font-size: 10px;
+  background: rgba(0,229,160,.08); border: 1px solid rgba(0,229,160,.2);
+  border-radius: 100px; padding: 3px 10px; color: var(--accent); letter-spacing:.06em;
+}
+.topbar-right { display: flex; align-items: center; gap: 16px; }
+.live-indicator { display: flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 11px; color: var(--muted2); }
+.live-dot { width:7px; height:7px; border-radius:50%; background:var(--green); animation: blink 2s infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+.logout-btn { font-family:var(--font-mono); font-size:11px; color:var(--muted2); background:none; border:1px solid var(--border); padding:5px 12px; border-radius:6px; cursor:pointer; transition:all .2s; }
+.logout-btn:hover { color:var(--text); border-color:var(--border2); }
+
+/* CONTENT AREA */
+.content { display: flex; flex: 1; overflow: hidden; }
+
+/* LEFT PANEL */
+.left-panel {
+  width: 260px; flex-shrink: 0;
+  background: var(--s1);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.panel-header {
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--muted2);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.panel-header span { font-size: 14px; font-weight: 700; font-family: var(--font-sans); color: var(--text); }
+
+/* Stat cards */
+.stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 14px; }
+.stat-card {
+  background: var(--s2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 12px;
+}
+.stat-label { font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted2); margin-bottom: 4px; }
+.stat-val   { font-family: var(--font-sans); font-size: 22px; font-weight: 800; }
+.stat-val.green  { color: var(--green); }
+.stat-val.yellow { color: var(--yellow); }
+.stat-val.red    { color: var(--red); }
+.stat-val.blue   { color: var(--blue); }
+
+/* Active sessions */
+.sessions-list { flex: 1; overflow-y: auto; padding: 0 14px 14px; }
+.session-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border-radius: 6px;
+  margin-bottom: 4px;
+  font-family: var(--font-mono); font-size: 11px;
+  background: var(--s2); border: 1px solid var(--border);
+  transition: border-color .2s;
+}
+.session-item:hover { border-color: var(--border2); }
+.session-dot { width:6px; height:6px; border-radius:50%; background:var(--green); flex-shrink:0; animation: blink 2s infinite; }
+.session-id  { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* DATE PICKER */
+.date-section { padding: 14px; border-top: 1px solid var(--border); }
+.date-label  { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:.1em; color:var(--muted2); margin-bottom:8px; }
+.date-select {
+  width: 100%; padding: 8px 10px;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 7px; color: var(--text);
+  font-family: var(--font-mono); font-size: 12px;
+  outline: none; cursor: pointer; transition: border-color .2s;
+}
+.date-select:focus { border-color: var(--accent); }
+.export-btn {
+  width: 100%; margin-top: 8px; padding: 9px;
+  background: rgba(0,229,160,.1); border: 1px solid rgba(0,229,160,.25);
+  border-radius: 7px; color: var(--accent);
+  font-family: var(--font-mono); font-size: 11px;
+  letter-spacing: .06em; text-transform: uppercase;
+  cursor: pointer; transition: all .2s;
+}
+.export-btn:hover { background: rgba(0,229,160,.18); }
+
+/* FILTER BAR */
+.filter-bar {
+  padding: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.filter-input {
+  width: 100%; padding: 8px 10px;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 7px; color: var(--text);
+  font-family: var(--font-mono); font-size: 12px;
+  outline: none; margin-bottom: 8px;
+}
+.filter-input:focus { border-color: var(--accent); }
+.filter-input::placeholder { color: var(--muted); }
+
+/* TYPE FILTERS */
+.type-filters { display: flex; flex-wrap: wrap; gap: 5px; }
+.type-chip {
+  font-family: var(--font-mono); font-size: 9px;
+  padding: 3px 8px; border-radius: 100px;
+  border: 1px solid var(--border); color: var(--muted2);
+  cursor: pointer; transition: all .15s;
+  text-transform: uppercase; letter-spacing: .06em;
+}
+.type-chip.active { border-color: var(--accent); color: var(--accent); background: rgba(0,229,160,.08); }
+
+/* RIGHT: VIOLATION FEED */
+.right-panel {
+  flex: 1; display: flex; flex-direction: column;
+  overflow: hidden; background: var(--bg);
+}
+.feed-header {
+  padding: 16px 24px; flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--s1);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.feed-title { font-size: 15px; font-weight: 700; }
+.feed-count { font-family: var(--font-mono); font-size: 11px; color: var(--muted2); }
+.clear-btn  { font-family: var(--font-mono); font-size: 10px; color: var(--muted2); background: none; border: 1px solid var(--border); padding: 4px 10px; border-radius: 5px; cursor: pointer; transition: all .2s; letter-spacing:.04em; }
+.clear-btn:hover { color: var(--red); border-color: var(--red); }
+
+/* DATE GROUPS */
+.feed { flex: 1; overflow-y: auto; padding: 20px 24px; }
+.date-group { margin-bottom: 28px; }
+.date-group-header {
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 12px;
+}
+.date-group-label {
+  font-family: var(--font-mono); font-size: 11px;
+  color: var(--muted2); letter-spacing: .08em; text-transform: uppercase;
+}
+.date-group-line { flex: 1; height: 1px; background: var(--border); }
+.date-group-count { font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
+
+/* VIOLATION ROW */
+.vrow {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  align-items: start;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  margin-bottom: 6px;
+  background: var(--s1);
+  transition: border-color .15s, transform .1s;
+  animation: fadeIn .25s ease both;
+}
+@keyframes fadeIn { from { opacity:0; transform: translateY(6px); } to { opacity:1; transform: none; } }
+.vrow:hover { border-color: var(--border2); transform: translateX(2px); }
+
+/* severity left border */
+.vrow.sev-critical { border-left: 3px solid var(--red); }
+.vrow.sev-high     { border-left: 3px solid var(--orange); }
+.vrow.sev-medium   { border-left: 3px solid var(--yellow); }
+.vrow.sev-low      { border-left: 3px solid var(--blue); }
+.vrow.sev-info     { border-left: 3px solid var(--green); }
+
+.vrow-left { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.event-icon {
+  width: 32px; height: 32px; border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; flex-shrink: 0;
+}
+.event-icon.red    { background: rgba(239,68,68,.12); }
+.event-icon.orange { background: rgba(249,115,22,.12); }
+.event-icon.yellow { background: rgba(245,158,11,.12); }
+.event-icon.blue   { background: rgba(59,130,246,.12); }
+.event-icon.green  { background: rgba(34,197,94,.12); }
+
+.vrow-center { min-width: 0; }
+.event-row1 { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; flex-wrap: wrap; }
+.event-type {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+  letter-spacing: .04em;
+}
+.sev-critical .event-type { color: var(--red); }
+.sev-high     .event-type { color: var(--orange); }
+.sev-medium   .event-type { color: var(--yellow); }
+.sev-low      .event-type { color: var(--blue); }
+.sev-info     .event-type { color: var(--green); }
+
+.student-tag {
+  font-family: var(--font-mono); font-size: 10px;
+  color: var(--muted2); background: var(--s2);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 1px 6px;
+}
+.event-detail  { font-size: 12px; color: var(--muted2); font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.vrow-right { text-align: right; flex-shrink: 0; }
+.event-time   { font-family: var(--font-mono); font-size: 11px; color: var(--muted2); white-space: nowrap; }
+.latency-badge {
+  display: inline-block; margin-top: 4px;
+  font-family: var(--font-mono); font-size: 9px;
+  padding: 2px 6px; border-radius: 4px;
+  letter-spacing: .04em;
+}
+.latency-badge.ok   { background: rgba(34,197,94,.1);   color: var(--green); }
+.latency-badge.mid  { background: rgba(245,158,11,.1);  color: var(--yellow); }
+.latency-badge.high { background: rgba(239,68,68,.1);   color: var(--red); }
+
+/* EMPTY STATE */
+.empty-state {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; height: 300px;
+  color: var(--muted); font-family: var(--font-mono); font-size: 12px; text-align: center;
+  gap: 10px;
+}
+.empty-state .icon { font-size: 40px; opacity: .3; }
+
+/* SCROLLBAR */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 10px; }
+
+/* TOAST */
+#toast {
+  position: fixed; bottom: 24px; right: 24px;
+  background: var(--s2); border: 1px solid var(--border2);
+  border-radius: 8px; padding: 12px 18px;
+  font-family: var(--font-mono); font-size: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.4);
+  transform: translateY(80px); opacity: 0;
+  transition: all .3s cubic-bezier(.16,1,.3,1);
+  z-index: 9999; max-width: 320px;
+}
+#toast.show { transform: none; opacity: 1; }
+#toast.critical { border-color: rgba(239,68,68,.4); color: var(--red); }
+#toast.info     { border-color: rgba(34,197,94,.4);  color: var(--green); }
+</style>
 </head>
 <body>
 
-    <div id="login-screen" class="login-container">
-        <div class="login-box">
-            <h2><i class="fas fa-lock"></i> Admin Login</h2>
-            <div class="input-group">
-                <input type="text" id="username" placeholder="Username">
-            </div>
-            <div class="input-group">
-                <input type="password" id="password" placeholder="Password">
-            </div>
-            <button onclick="login()" class="btn-login">Login</button>
-            <p id="login-error" class="error-msg"></p>
+<!-- ===== LOGIN ===== -->
+<div id="loginScreen">
+  <div class="login-card">
+    <div class="login-eyebrow">Admin Access</div>
+    <div class="login-title">Proctor Dashboard</div>
+    <div class="login-sub">Real-time CBT monitoring system</div>
+    <div class="lf">
+      <label>Username</label>
+      <input type="text" id="lUser" placeholder="admin" autocomplete="off" />
+    </div>
+    <div class="lf">
+      <label>Password</label>
+      <input type="password" id="lPass" placeholder="••••••••" />
+    </div>
+    <button class="login-btn" onclick="doAdminLogin()">Sign In →</button>
+    <div class="login-err" id="loginErr">Invalid credentials</div>
+  </div>
+</div>
+
+<!-- ===== APP ===== -->
+<div id="app">
+  <!-- TOP BAR -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="logo">CBT <span>Proctor</span></div>
+      <div class="topbar-tag">Admin Console</div>
+    </div>
+    <div class="topbar-right">
+      <div class="live-indicator"><div class="live-dot"></div> Live</div>
+      <button class="logout-btn" onclick="doLogout()">Sign Out</button>
+    </div>
+  </div>
+
+  <div class="content">
+    <!-- LEFT -->
+    <div class="left-panel">
+      <!-- Stats -->
+      <div class="panel-header">Overview <span id="totalViolCount">0</span></div>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Online</div>
+          <div class="stat-val green" id="statOnline">0</div>
         </div>
+        <div class="stat-card">
+          <div class="stat-label">Violations</div>
+          <div class="stat-val yellow" id="statViolations">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Critical</div>
+          <div class="stat-val red" id="statCritical">0</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Avg Latency</div>
+          <div class="stat-val blue" id="statLatency">—</div>
+        </div>
+      </div>
+
+      <!-- Active Sessions -->
+      <div class="panel-header" style="border-top:1px solid var(--border)">Active Sessions</div>
+      <div class="sessions-list" id="sessionsList">
+        <div style="font-family:var(--font-mono);font-size:11px;color:var(--muted);padding:8px 2px">No active sessions</div>
+      </div>
+
+      <!-- Date filter + export -->
+      <div class="date-section">
+        <div class="date-label">Filter by Date</div>
+        <select class="date-select" id="dateFilter" onchange="applyDateFilter()">
+          <option value="">All dates</option>
+        </select>
+        <button class="export-btn" onclick="exportXlsx()">⬇ Export Excel (.xlsx)</button>
+      </div>
+
+      <!-- Student ID filter -->
+      <div class="filter-bar">
+        <input class="filter-input" id="studentFilter" placeholder="Filter by Student ID…" oninput="applyFilters()" />
+        <div class="type-filters" id="typeFilters"></div>
+      </div>
     </div>
 
-    <div id="dashboard-screen" class="container" style="display: none;">
-        <header>
-            <div class="header-content">
-                <h2><i class="fas fa-shield-alt"></i> Live Malpractice Monitor</h2>
-                <button onclick="logout()" class="btn-logout"><i class="fas fa-sign-out-alt"></i> Logout</button>
-            </div>
-        </header>
-
-        <div class="controls">
-            <div class="filter-group">
-                <label>Student ID:</label>
-                <input type="text" id="filterStudent" placeholder="Search ID...">
-            </div>
-            
-            <div class="filter-group">
-                <label>Start Time:</label>
-                <input type="datetime-local" id="filterStart">
-            </div>
-
-            <div class="filter-group">
-                <label>End Time:</label>
-                <input type="datetime-local" id="filterEnd">
-            </div>
-
-            <button onclick="exportFilteredCsv()" class="btn-export">
-                <i class="fas fa-file-csv"></i> Export CSV
-            </button>
-            <button onclick="clearFilters()" class="btn-clear">Clear Filters</button>
+    <!-- RIGHT: FEED -->
+    <div class="right-panel">
+      <div class="feed-header">
+        <div class="feed-title">Violation Feed</div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <span class="feed-count" id="feedCount">0 events</span>
+          <button class="clear-btn" onclick="clearFeed()">Clear view</button>
         </div>
-
-        <div class="table-wrapper">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Student ID</th>
-                        <th>Event</th>
-                        <th>Detail</th>
-                        <th>Time</th>
-                    </tr>
-                </thead>
-                <tbody id="logTable"></tbody>
-            </table>
+      </div>
+      <div class="feed" id="feed">
+        <div class="empty-state">
+          <div class="icon">🛡</div>
+          <div>Waiting for violations…</div>
+          <div style="color:var(--muted);font-size:10px">Events appear here in real time</div>
         </div>
+      </div>
     </div>
+  </div>
+</div>
 
-    <script src="/socket.io/socket.io.js"></script>
-    <script src="admin.js"></script>
+<!-- TOAST -->
+<div id="toast"></div>
 
+<script>
+// ===== CONFIG =====
+const SERVER = "http://localhost:3000";
+let authToken = null;
+let socket    = null;
+
+// All logs in memory
+let allLogs    = [];
+let activeSessions = new Set();
+let latencies  = [];
+
+// Active type filters
+let activeTypes = new Set();
+let studentFilterVal = "";
+let dateFilterVal    = "";
+
+// ===== SEVERITY MAP =====
+const SEVERITY = {
+  CRITICAL_DISCONNECT:  "critical",
+  TAB_SWITCH:           "high",
+  UNAUTHORIZED_NAVIGATION: "high",
+  BROWSER_OUT_OF_FOCUS: "high",
+  WINDOW_FOCUS_LOST:    "high",
+  TAB_HIDDEN:           "medium",
+  PAGE_UNLOAD:          "medium",
+  SUSPICIOUS_RESIZE:    "medium",
+  CLIPBOARD_ACTION:     "low",
+  RIGHT_CLICK:          "low",
+  RESTRICTED_KEY:       "low",
+  EXAM_SUBMITTED:       "info",
+};
+
+const ICONS = {
+  CRITICAL_DISCONNECT:  { emoji: "💀", cls: "red" },
+  TAB_SWITCH:           { emoji: "🔀", cls: "orange" },
+  UNAUTHORIZED_NAVIGATION: { emoji: "🌐", cls: "orange" },
+  BROWSER_OUT_OF_FOCUS: { emoji: "👁", cls: "orange" },
+  WINDOW_FOCUS_LOST:    { emoji: "🔲", cls: "yellow" },
+  TAB_HIDDEN:           { emoji: "🙈", cls: "yellow" },
+  PAGE_UNLOAD:          { emoji: "🚪", cls: "yellow" },
+  SUSPICIOUS_RESIZE:    { emoji: "📐", cls: "yellow" },
+  CLIPBOARD_ACTION:     { emoji: "📋", cls: "blue" },
+  RIGHT_CLICK:          { emoji: "🖱", cls: "blue" },
+  RESTRICTED_KEY:       { emoji: "⌨", cls: "blue" },
+  EXAM_SUBMITTED:       { emoji: "✅", cls: "green" },
+};
+
+function getSev(type)  { return SEVERITY[type] || "low"; }
+function getIcon(type) { return ICONS[type] || { emoji: "⚠", cls: "yellow" }; }
+
+// ===== LOGIN =====
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !document.getElementById("loginScreen").style.display)
+    doAdminLogin();
+});
+
+async function doAdminLogin() {
+  const user = document.getElementById("lUser").value.trim();
+  const pass = document.getElementById("lPass").value;
+  const err  = document.getElementById("loginErr");
+
+  try {
+    const res  = await fetch(`${SERVER}/api/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: user, password: pass })
+    });
+    const data = await res.json();
+    if (data.success) {
+      authToken = data.token;
+      document.getElementById("loginScreen").style.display = "none";
+      document.getElementById("app").style.display = "flex";
+      initDashboard();
+    } else {
+      err.classList.add("show");
+    }
+  } catch {
+    err.textContent = "Cannot connect to server.";
+    err.classList.add("show");
+  }
+}
+
+function doLogout() {
+  authToken = null;
+  if (socket) socket.disconnect();
+  location.reload();
+}
+
+// ===== INIT =====
+async function initDashboard() {
+  await loadDates();
+  await loadLogs();
+  connectSocket();
+}
+
+// ===== SOCKET =====
+function connectSocket() {
+  socket = io(SERVER);
+
+  socket.on("new_violation", (v) => {
+    allLogs.unshift(v);
+    if (v.latencyMs != null) latencies.push(v.latencyMs);
+    updateStats();
+    renderFeed();
+    showToast(v);
+  });
+
+  socket.on("active_sessions", (ids) => {
+    activeSessions = new Set(ids);
+    renderSessions();
+    updateStats();
+  });
+
+  socket.on("session_started", (id) => {
+    activeSessions.add(id);
+    renderSessions();
+    updateStats();
+    showToast({ eventType: "SESSION_ONLINE", studentId: id, detail: "Student connected" }, "info");
+  });
+
+  socket.on("session_ended", (id) => {
+    activeSessions.delete(id);
+    renderSessions();
+    updateStats();
+  });
+}
+
+// ===== LOAD DATES =====
+async function loadDates() {
+  try {
+    const res   = await fetch(`${SERVER}/api/logs/dates`, { headers: authHeader() });
+    const dates = await res.json();
+    const sel   = document.getElementById("dateFilter");
+    dates.forEach(d => {
+      const opt = document.createElement("option");
+      opt.value = d._id;
+      opt.textContent = `${formatDateLabel(d._id)} (${d.count})`;
+      sel.appendChild(opt);
+    });
+  } catch {}
+}
+
+function formatDateLabel(iso) {
+  const d = new Date(iso + "T00:00:00");
+  return d.toLocaleDateString("en-GB", { weekday:"short", day:"numeric", month:"short", year:"numeric" });
+}
+
+// ===== LOAD LOGS =====
+async function loadLogs() {
+  try {
+    const params = new URLSearchParams();
+    if (dateFilterVal) {
+      params.set("start", dateFilterVal + "T00:00:00.000Z");
+      params.set("end",   dateFilterVal + "T23:59:59.999Z");
+    }
+    if (studentFilterVal) params.set("studentId", studentFilterVal);
+
+    const res  = await fetch(`${SERVER}/api/logs?${params}`, { headers: authHeader() });
+    allLogs    = await res.json();
+    latencies  = allLogs.filter(l => l.latencyMs != null).map(l => l.latencyMs);
+    updateStats();
+    buildTypeFilters();
+    renderFeed();
+  } catch {}
+}
+
+// ===== STATS =====
+function updateStats() {
+  document.getElementById("statOnline").textContent     = activeSessions.size;
+  document.getElementById("totalViolCount").textContent = allLogs.length;
+  document.getElementById("statViolations").textContent = allLogs.filter(l => !["EXAM_SUBMITTED"].includes(l.eventType)).length;
+  document.getElementById("statCritical").textContent   = allLogs.filter(l => l.eventType === "CRITICAL_DISCONNECT").length;
+
+  if (latencies.length) {
+    const avg = Math.round(latencies.reduce((a,b)=>a+b,0) / latencies.length);
+    document.getElementById("statLatency").textContent = avg + "ms";
+  }
+}
+
+// ===== SESSIONS =====
+function renderSessions() {
+  const el = document.getElementById("sessionsList");
+  if (activeSessions.size === 0) {
+    el.innerHTML = `<div style="font-family:var(--font-mono);font-size:11px;color:var(--muted);padding:8px 2px">No active sessions</div>`;
+    return;
+  }
+  el.innerHTML = [...activeSessions].map(id => `
+    <div class="session-item">
+      <div class="session-dot"></div>
+      <div class="session-id">${escHtml(id)}</div>
+    </div>
+  `).join("");
+}
+
+// ===== TYPE FILTERS =====
+function buildTypeFilters() {
+  const types = [...new Set(allLogs.map(l => l.eventType))];
+  const el    = document.getElementById("typeFilters");
+  el.innerHTML = types.map(t => `
+    <div class="type-chip ${activeTypes.has(t) ? 'active' : ''}" onclick="toggleType('${t}')">${t.replace(/_/g,' ')}</div>
+  `).join("");
+}
+
+function toggleType(type) {
+  if (activeTypes.has(type)) activeTypes.delete(type);
+  else activeTypes.add(type);
+  buildTypeFilters();
+  renderFeed();
+}
+
+// ===== FILTERS =====
+function applyFilters() {
+  studentFilterVal = document.getElementById("studentFilter").value.trim();
+  renderFeed();
+}
+
+async function applyDateFilter() {
+  dateFilterVal = document.getElementById("dateFilter").value;
+  await loadLogs();
+}
+
+// ===== RENDER FEED =====
+function renderFeed() {
+  let logs = allLogs;
+
+  if (studentFilterVal) {
+    logs = logs.filter(l => l.studentId.toLowerCase().includes(studentFilterVal.toLowerCase()));
+  }
+  if (activeTypes.size > 0) {
+    logs = logs.filter(l => activeTypes.has(l.eventType));
+  }
+
+  document.getElementById("feedCount").textContent = `${logs.length} events`;
+
+  if (logs.length === 0) {
+    document.getElementById("feed").innerHTML = `
+      <div class="empty-state">
+        <div class="icon">🛡</div>
+        <div>No violations found</div>
+        <div style="color:var(--muted);font-size:10px">Try adjusting filters or date</div>
+      </div>`;
+    return;
+  }
+
+  // Group by date
+  const groups = {};
+  logs.forEach(l => {
+    const ts  = l.serverTimestamp || l.clientTimestamp;
+    const key = ts ? ts.slice(0, 10) : "unknown";
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(l);
+  });
+
+  let html = "";
+  for (const [date, items] of Object.entries(groups)) {
+    const label = date === "unknown" ? "Unknown Date" : formatDateLabel(date);
+    html += `
+      <div class="date-group">
+        <div class="date-group-header">
+          <div class="date-group-label">${label}</div>
+          <div class="date-group-line"></div>
+          <div class="date-group-count">${items.length}</div>
+        </div>
+        ${items.map(renderRow).join("")}
+      </div>`;
+  }
+
+  document.getElementById("feed").innerHTML = html;
+}
+
+function renderRow(v) {
+  const sev   = getSev(v.eventType);
+  const icon  = getIcon(v.eventType);
+  const ts    = v.serverTimestamp || v.clientTimestamp;
+  const time  = ts ? new Date(ts).toLocaleTimeString("en-GB", { hour12: false }) : "—";
+
+  let latencyHtml = "";
+  if (v.latencyMs != null) {
+    const cls = v.latencyMs < 500 ? "ok" : v.latencyMs < 2000 ? "mid" : "high";
+    latencyHtml = `<span class="latency-badge ${cls}">${v.latencyMs}ms</span>`;
+  }
+
+  return `
+    <div class="vrow sev-${sev}">
+      <div class="vrow-left">
+        <div class="event-icon ${icon.cls}">${icon.emoji}</div>
+      </div>
+      <div class="vrow-center">
+        <div class="event-row1">
+          <span class="event-type">${escHtml(v.eventType)}</span>
+          <span class="student-tag">${escHtml(v.studentId)}</span>
+        </div>
+        <div class="event-detail">${escHtml(v.detail || "")}</div>
+      </div>
+      <div class="vrow-right">
+        <div class="event-time">${time}</div>
+        ${latencyHtml}
+      </div>
+    </div>`;
+}
+
+// ===== EXPORT XLSX =====
+async function exportXlsx() {
+  const params = new URLSearchParams();
+  if (dateFilterVal) {
+    params.set("start", dateFilterVal + "T00:00:00.000Z");
+    params.set("end",   dateFilterVal + "T23:59:59.999Z");
+  }
+  if (studentFilterVal) params.set("studentId", studentFilterVal);
+
+  try {
+    const res  = await fetch(`${SERVER}/api/logs/export/xlsx-data?${params}`, { headers: authHeader() });
+    const data = await res.json();
+
+    const ws = XLSX.utils.json_to_sheet(data);
+
+    // Column widths
+    ws["!cols"] = [
+      { wch: 20 }, // Student ID
+      { wch: 28 }, // Event
+      { wch: 50 }, // Detail
+      { wch: 26 }, // Client Time
+      { wch: 26 }, // Server Time
+      { wch: 14 }, // Latency
+    ];
+
+    const wb   = XLSX.utils.book_new();
+    const date = dateFilterVal || "all";
+    XLSX.utils.book_append_sheet(wb, ws, `Violations ${date}`);
+    XLSX.writeFile(wb, `cbt-violations-${date}.xlsx`);
+  } catch (err) {
+    alert("Export failed: " + err.message);
+  }
+}
+
+// ===== TOAST =====
+function showToast(v, forceType = null) {
+  const toast = document.getElementById("toast");
+  const sev   = forceType || getSev(v.eventType);
+  toast.className = sev === "critical" || sev === "high" ? "critical" : "info";
+  toast.textContent = `${v.studentId} — ${v.eventType}`;
+  toast.classList.add("show");
+  setTimeout(() => toast.classList.remove("show"), 3500);
+}
+
+// ===== UTILS =====
+function authHeader() { return { "Authorization": `Bearer ${authToken}` }; }
+function escHtml(s)   { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function clearFeed()  { allLogs = []; latencies = []; updateStats(); renderFeed(); }
+</script>
 </body>
 </html>

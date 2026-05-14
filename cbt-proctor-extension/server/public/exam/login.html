@@ -1,35 +1,261 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>CBT Login</title>
-    <style>
-        body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background: #f4f4f4; }
-        .login-box { background: white; padding: 40px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); width: 300px; text-align: center; }
-        input { width: 90%; padding: 10px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px; }
-        button { width: 100%; padding: 10px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
-        button:hover { background: #218838; }
-    </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CBT — Exam Login</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;800&display=swap" rel="stylesheet" />
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:      #0a0c0f;
+    --surface: #111318;
+    --border:  #1e2228;
+    --accent:  #00e5a0;
+    --accent2: #0077ff;
+    --text:    #e8eaf0;
+    --muted:   #5a6070;
+    --danger:  #ff4d6d;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Syne', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+
+  /* Animated grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(var(--border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: 40px 40px;
+    opacity: 0.5;
+    z-index: 0;
+  }
+
+  /* Glow orbs */
+  body::after {
+    content: '';
+    position: fixed;
+    width: 600px; height: 600px;
+    background: radial-gradient(circle, rgba(0,229,160,0.07) 0%, transparent 70%);
+    top: -100px; left: -100px;
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  .orb2 {
+    position: fixed;
+    width: 500px; height: 500px;
+    background: radial-gradient(circle, rgba(0,119,255,0.06) 0%, transparent 70%);
+    bottom: -100px; right: -100px;
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  .card {
+    position: relative;
+    z-index: 1;
+    width: 420px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 48px 40px;
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.03), 0 24px 64px rgba(0,0,0,0.5);
+    animation: slideUp 0.5s cubic-bezier(0.16,1,0.3,1) both;
+  }
+
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(24px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(0,229,160,0.08);
+    border: 1px solid rgba(0,229,160,0.2);
+    border-radius: 100px;
+    padding: 4px 12px;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 24px;
+  }
+  .badge::before { content: '●'; font-size: 8px; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  h1 {
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    line-height: 1.2;
+    margin-bottom: 6px;
+  }
+
+  .subtitle {
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 400;
+    margin-bottom: 36px;
+    font-family: 'DM Mono', monospace;
+  }
+
+  .field { margin-bottom: 16px; }
+
+  label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 8px;
+    font-family: 'DM Mono', monospace;
+  }
+
+  input {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    color: var(--text);
+    font-size: 14px;
+    font-family: 'DM Mono', monospace;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  input:focus { border-color: var(--accent); }
+  input::placeholder { color: var(--muted); }
+
+  .btn {
+    width: 100%;
+    margin-top: 24px;
+    padding: 14px;
+    background: var(--accent);
+    color: #000;
+    border: none;
+    border-radius: 8px;
+    font-family: 'Syne', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: opacity 0.2s, transform 0.15s;
+    text-transform: uppercase;
+  }
+  .btn:hover  { opacity: 0.9; transform: translateY(-1px); }
+  .btn:active { transform: translateY(0); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+  .error {
+    margin-top: 14px;
+    padding: 10px 14px;
+    background: rgba(255,77,109,0.1);
+    border: 1px solid rgba(255,77,109,0.3);
+    border-radius: 8px;
+    color: var(--danger);
+    font-size: 12px;
+    font-family: 'DM Mono', monospace;
+    display: none;
+  }
+  .error.show { display: block; }
+
+  .footer {
+    margin-top: 28px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 11px;
+    font-family: 'DM Mono', monospace;
+  }
+  .footer span { color: var(--accent2); }
+</style>
 </head>
 <body>
-    <div class="login-box">
-        <h2>CBT Exam Portal</h2>
-        <input type="text" id="matric" placeholder="Enter Matric Number" required>
-        <input type="password" id="password" placeholder="Password" required>
-        <button onclick="startExam()">Start Exam</button>
-    </div>
+<div class="orb2"></div>
+<div class="card">
+  <div class="badge">Proctored Exam Session</div>
+  <h1>Student Login</h1>
+  <p class="subtitle">Enter your credentials to begin</p>
 
-    <script>
-        function startExam() {
-            const matric = document.getElementById("matric").value;
-            if(!matric) return alert("Enter Matric Number");
+  <div class="field">
+    <label>Student ID</label>
+    <input type="text" id="studentId" placeholder="e.g. STU-2024-001" autocomplete="off" />
+  </div>
+  <div class="field">
+    <label>Full Name</label>
+    <input type="text" id="fullName" placeholder="Your full name" autocomplete="off" />
+  </div>
 
-            // SAVE ID FOR EXTENSION TO READ
-            sessionStorage.setItem("cbt_student_id", matric);
-            
-            // Redirect to exam paper
-            window.location.href = "paper.html";
-        }
-    </script>
+  <button class="btn" id="loginBtn" onclick="doLogin()">Begin Exam →</button>
+  <div class="error" id="errMsg"></div>
+
+  <div class="footer">
+    <span>⚠</span> This session is monitored. All activity is recorded.
+  </div>
+</div>
+
+<script>
+function doLogin() {
+  const id   = document.getElementById("studentId").value.trim();
+  const name = document.getElementById("fullName").value.trim();
+  const err  = document.getElementById("errMsg");
+  const btn  = document.getElementById("loginBtn");
+
+  if (!id || !name) {
+    err.textContent = "Both fields are required.";
+    err.classList.add("show");
+    return;
+  }
+
+  err.classList.remove("show");
+  btn.disabled = true;
+  btn.textContent = "Starting session…";
+
+  // Store in localStorage so content.js can pick it up
+  const fullId = id;
+  localStorage.setItem("cbt_student_id", fullId);
+  localStorage.setItem("cbt_student_name", name);
+
+  // Notify server that exam is starting
+  fetch("http://localhost:3000/api/exam/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ studentId: fullId })
+  })
+  .then(() => { window.location.href = "paper.html"; })
+  .catch(() => {
+    // Still proceed — server will catch up via heartbeat
+    window.location.href = "paper.html";
+  });
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") doLogin();
+});
+
+// Clear any stale session
+localStorage.removeItem("cbt_student_id");
+localStorage.removeItem("cbt_student_name");
+</script>
 </body>
 </html>

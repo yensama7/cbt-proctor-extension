@@ -1,245 +1,291 @@
 const express = require("express");
 const mongoose = require("mongoose");
-const cors = require("cors");
-const http = require("http");
+const cors    = require("cors");
+const http    = require("http");
+const crypto  = require("crypto");
+const path    = require("path");
 const { Server } = require("socket.io");
 
 const ViolationLog = require("./models/ViolationLog");
 
-const app = express();
+// ---------------------------------------------------------------------------
+// CONFIG  (use env vars in production)
+// ---------------------------------------------------------------------------
+const ADMIN_USER            = process.env.ADMIN_USER   || "admin";
+const ADMIN_PASS            = process.env.ADMIN_PASS   || "admin123";
+const TOKEN_SECRET          = process.env.TOKEN_SECRET || crypto.randomBytes(32).toString("hex");
+const PORT                  = process.env.PORT         || 3000;
+const HEARTBEAT_TIMEOUT_MS  = 45_000;
+const HEARTBEAT_CHECK_MS    = 10_000;
+
+// ---------------------------------------------------------------------------
+// APP SETUP
+// ---------------------------------------------------------------------------
+const app    = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
-
-// 1. SET ADMIN CREDENTIALS
-const ADMIN_USER = "admin";
-const ADMIN_PASS = "admin123";
-
-// 2. HEARTBEAT SETTINGS
-// Increased to 45s to prevent false alarms when Chrome throttles background tabs
-const HEARTBEAT_TIMEOUT = 45000; 
-let activeSessions = {}; // { studentId: lastSeenTimestamp }
+const io     = new Server(server, { cors: { origin: "*" } });
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static("public"));
+app.use(express.static(path.join(__dirname, "public")));
 
-mongoose.connect("mongodb://127.0.0.1:27017/cbt_logs")
+mongoose
+    .connect("mongodb://127.0.0.1:27017/cbt_logs")
     .then(() => console.log("✅ MongoDB Connected"))
-    .catch(err => console.log("❌ MongoDB Error:", err));
+    .catch((err) => console.error("❌ MongoDB Error:", err));
 
-// --- AUTH MIDDLEWARE ---
-const authenticate = (req, res, next) => {
-    const authHeader = req.headers.authorization;
-    const validToken = Buffer.from(ADMIN_USER + ":" + ADMIN_PASS).toString('base64');
-    if (authHeader === "Bearer " + validToken) next();
-    else res.status(401).json({ error: "Unauthorized" });
-};
+// ---------------------------------------------------------------------------
+// SESSION STORE  { studentId → lastSeenMs }
+// ---------------------------------------------------------------------------
+const activeSessions = new Map();
+
+// ---------------------------------------------------------------------------
+// HELPERS
+// ---------------------------------------------------------------------------
+const isValidId = (id) =>
+    typeof id === "string" && id.trim() !== "" && id !== "Unknown" && id !== "undefined";
+
+const generateToken = (username) =>
+    crypto.createHmac("sha256", TOKEN_SECRET).update(username).digest("hex");
 
 const buildTimeRangeQuery = (start, end) => {
     const range = {};
-
-    if (start) {
-        const startDate = new Date(start);
-        if (!Number.isNaN(startDate.getTime())) range.$gte = startDate;
-    }
-
-    if (end) {
-        const endDate = new Date(end);
-        if (!Number.isNaN(endDate.getTime())) range.$lte = endDate;
-    }
-
+    if (start) { const d = new Date(start); if (!isNaN(d)) range.$gte = d; }
+    if (end)   { const d = new Date(end);   if (!isNaN(d)) range.$lte = d; }
     return Object.keys(range).length ? { serverTimestamp: range } : {};
 };
 
-const getLogIsoTime = (log) => {
-    if (log.clientTimestamp) {
-        const clientDate = new Date(log.clientTimestamp);
-        if (!Number.isNaN(clientDate.getTime())) return clientDate.toISOString();
-    }
+/** Escape a cell value for CSV output */
+const escapeCsv = (v) => `"${(v == null ? "" : String(v)).replace(/"/g, '""')}"`;
 
-    if (log.serverTimestamp) {
-        const serverDate = new Date(log.serverTimestamp);
-        if (!Number.isNaN(serverDate.getTime())) return serverDate.toISOString();
-    }
+/**
+ * Save a log entry to MongoDB and broadcast it via Socket.io.
+ * Returns the saved document.
+ */
+const persistAndBroadcast = async ({ studentId, eventType, detail, clientTimestamp }) => {
+    const log = new ViolationLog({ studentId, eventType, detail, clientTimestamp });
+    await log.save();
 
-    return new Date().toISOString();
+    io.emit("new_violation", {
+        _id:             log._id,
+        studentId,
+        eventType,
+        detail,
+        clientTimestamp: log.clientTimestamp,
+        serverTimestamp: log.serverTimestamp,
+        latencyMs:       log.latencyMs,
+    });
+
+    return log;
 };
 
+// ---------------------------------------------------------------------------
+// AUTH MIDDLEWARE
+// ---------------------------------------------------------------------------
+const authenticate = (req, res, next) => {
+    const [scheme, token] = (req.headers.authorization || "").split(" ");
+    if (scheme === "Bearer" && token === generateToken(ADMIN_USER)) return next();
+    res.status(401).json({ error: "Unauthorized" });
+};
+
+// ---------------------------------------------------------------------------
+// SOCKET.IO
+// ---------------------------------------------------------------------------
 io.on("connection", (socket) => {
-    console.log("Client connected:", socket.id);
+    console.log("Dashboard connected:", socket.id);
+
+    // Send current active sessions immediately on connect
+    socket.emit("active_sessions", [...activeSessions.keys()]);
 });
 
-// --- HEARTBEAT CHECKER (Runs every 10 seconds) ---
+// ---------------------------------------------------------------------------
+// HEARTBEAT WATCHDOG
+// ---------------------------------------------------------------------------
 setInterval(async () => {
     const now = Date.now();
-    for (const [studentId, lastSeen] of Object.entries(activeSessions)) {
-        if (now - lastSeen > HEARTBEAT_TIMEOUT) {
-            
-            // Only alert if we actually knew the student ID
-            if (studentId && studentId !== "Unknown") {
-                const disconnectTime = new Date().toISOString();
-                const alert = {
-                    studentId,
-                    eventType: "CRITICAL_DISCONNECT",
-                    detail: "Signal lost. Network failed or Extension disabled.",
-                    time: disconnectTime
-                };
-                console.log(`[❌ DISCONNECT] ${studentId}`);
+    for (const [studentId, lastSeen] of activeSessions) {
+        if (now - lastSeen <= HEARTBEAT_TIMEOUT_MS) continue;
 
-                try {
-                    const disconnectLog = new ViolationLog({
-                        studentId,
-                        eventType: "CRITICAL_DISCONNECT",
-                        detail: "Signal lost. Network failed or Extension disabled.",
-                        clientTimestamp: disconnectTime
-                    });
-                    await disconnectLog.save();
-                    alert._id = disconnectLog._id;
-                } catch (err) {
-                    console.error("Failed to persist disconnect log", err);
-                }
+        activeSessions.delete(studentId);
+        io.emit("session_ended", studentId);
+        console.log(`[❌ DISCONNECT] ${studentId}`);
 
-                io.emit("new_violation", alert);
-            }
-
-            // Stop tracking them
-            delete activeSessions[studentId];
+        try {
+            await persistAndBroadcast({
+                studentId,
+                eventType:       "CRITICAL_DISCONNECT",
+                detail:          "Signal lost. Network failed or extension disabled.",
+                clientTimestamp: new Date().toISOString(),
+            });
+        } catch (err) {
+            console.error(`Disconnect log failed for ${studentId}:`, err);
         }
     }
-}, 10000);
+}, HEARTBEAT_CHECK_MS);
 
-// --- API ENDPOINTS ---
+// ---------------------------------------------------------------------------
+// ROUTES
+// ---------------------------------------------------------------------------
+app.get("/", (_req, res) => res.redirect("/exam/login.html"));
 
+// Student heartbeat
 app.post("/api/heartbeat", (req, res) => {
     const { studentId } = req.body;
-    
-    // IGNORE UNKNOWNS: Don't track if they haven't logged in yet
-    if (studentId && studentId !== "Unknown") {
-        activeSessions[studentId] = Date.now();
-        res.sendStatus(200);
-    } else {
-        res.sendStatus(200); // Just say OK, but don't track
+    if (isValidId(studentId)) {
+        const isNew = !activeSessions.has(studentId);
+        activeSessions.set(studentId, Date.now());
+        if (isNew) io.emit("session_started", studentId);
     }
+    res.sendStatus(200);
 });
 
+// Exam start
 app.post("/api/exam/start", (req, res) => {
     const { studentId } = req.body;
-
-    if (studentId && studentId !== "Unknown") {
-        activeSessions[studentId] = Date.now();
+    if (isValidId(studentId)) {
+        activeSessions.set(studentId, Date.now());
+        io.emit("session_started", studentId);
     }
-
     res.sendStatus(200);
 });
 
-// LOGOUT ENDPOINT (Now logs the event to Admin)
+// Exam submit / logout
 app.post("/api/logout", async (req, res) => {
     const { studentId } = req.body;
-    const timestamp = new Date().toISOString();
+    if (!isValidId(studentId)) return res.sendStatus(200);
 
-    if (studentId) {
-        // 1. Stop tracking immediately (Prevent Disconnect Error)
-        if (activeSessions[studentId]) {
-            delete activeSessions[studentId];
-        }
+    activeSessions.delete(studentId);
+    io.emit("session_ended", studentId);
 
-        // 2. Log "Exam Submitted" to Database
-        const log = new ViolationLog({
+    try {
+        await persistAndBroadcast({
             studentId,
-            eventType: "EXAM_SUBMITTED",
-            detail: "Student successfully submitted and logged out.",
-            clientTimestamp: timestamp
+            eventType:       "EXAM_SUBMITTED",
+            detail:          "Student submitted and logged out.",
+            clientTimestamp: new Date().toISOString(),
         });
-        await log.save();
-
-        // 3. Notify Admin Dashboard (Green Alert)
-        const alert = {
-            studentId,
-            eventType: "EXAM_SUBMITTED",
-            detail: "Student successfully submitted and logged out.",
-            time: timestamp,
-            _id: log._id
-        };
-        io.emit("new_violation", alert); // Re-using the violation channel for status updates
-        
-        console.log(`[✅ FINISHED] ${studentId} submitted the exam.`);
+        console.log(`[✅ SUBMITTED] ${studentId}`);
+    } catch (err) {
+        console.error(`Logout log failed for ${studentId}:`, err);
     }
-    
     res.sendStatus(200);
 });
 
+// Admin login
 app.post("/api/login", (req, res) => {
     const { username, password } = req.body;
     if (username === ADMIN_USER && password === ADMIN_PASS) {
-        const token = Buffer.from(username + ":" + password).toString('base64');
-        res.json({ success: true, token });
-    } else {
-        res.status(401).json({ success: false });
+        return res.json({ success: true, token: generateToken(username) });
     }
+    res.status(401).json({ success: false });
 });
 
-// Redirect root to Login
-app.get("/", (req, res) => res.redirect("/exam/login.html"));
-
+// Violation report from extension
 app.post("/api/report", async (req, res) => {
     const { studentId, eventType, detail, timestamp } = req.body;
 
-    // Reject reports from "Unknown" students
-    if (!studentId || studentId === "Unknown") {
-        return res.status(400).send("Login Required");
+    if (!isValidId(studentId)) return res.status(400).json({ error: "Login required" });
+
+    activeSessions.set(studentId, Date.now());
+
+    try {
+        await persistAndBroadcast({ studentId, eventType, detail, clientTimestamp: timestamp });
+        res.sendStatus(200);
+    } catch (err) {
+        console.error("Report save failed:", err);
+        res.status(500).json({ error: "Failed to save report" });
     }
-    
-    // Update heartbeat since we heard from them
-    activeSessions[studentId] = Date.now();
-
-    const log = new ViolationLog({ studentId, eventType, detail, clientTimestamp: timestamp });
-    await log.save();
-
-    const alert = { studentId, eventType, detail, time: timestamp, _id: log._id };
-    io.emit("new_violation", alert);
-    
-    res.send("Logged");
 });
 
+// Fetch logs (admin)
 app.get("/api/logs", authenticate, async (req, res) => {
     try {
-        const { start, end } = req.query;
-        const query = buildTimeRangeQuery(start, end);
-        const logs = await ViolationLog.find(query).sort({ serverTimestamp: -1 });
+        const query = buildTimeRangeQuery(req.query.start, req.query.end);
+        if (req.query.studentId) query.studentId = req.query.studentId;
+        const logs = await ViolationLog.find(query).sort({ serverTimestamp: -1 }).limit(2000);
         res.json(logs);
     } catch (err) {
-        console.error("Failed to fetch logs", err);
+        console.error("Fetch logs failed:", err);
         res.status(500).json({ error: "Failed to fetch logs" });
     }
 });
 
-app.get("/api/logs/export", authenticate, async (req, res) => {
+// Distinct dates that have logs (for date picker in dashboard)
+app.get("/api/logs/dates", authenticate, async (req, res) => {
     try {
-        const { start, end } = req.query;
-        const query = buildTimeRangeQuery(start, end);
-        const logs = await ViolationLog.find(query).sort({ serverTimestamp: -1 });
-
-        const escapeCsv = (value) => {
-            const text = value == null ? "" : String(value);
-            return `"${text.replace(/"/g, '""')}"`;
-        };
-
-        const headers = ["Student ID", "Event", "Detail", "Time"];
-        const rows = logs.map(log => [
-            escapeCsv(log.studentId),
-            escapeCsv(log.eventType),
-            escapeCsv(log.detail),
-            escapeCsv(getLogIsoTime(log))
-        ].join(","));
-
-        const csv = [headers.join(","), ...rows].join("\n");
-        res.setHeader("Content-Type", "text/csv; charset=utf-8");
-        res.setHeader("Content-Disposition", "attachment; filename=cbt-logs.csv");
-        res.send(csv);
+        // Group by date string YYYY-MM-DD
+        const dates = await ViolationLog.aggregate([
+            {
+                $group: {
+                    _id: {
+                        $dateToString: { format: "%Y-%m-%d", date: "$serverTimestamp" }
+                    },
+                    count: { $sum: 1 }
+                }
+            },
+            { $sort: { _id: -1 } }
+        ]);
+        res.json(dates);
     } catch (err) {
-        console.error("Failed to export logs", err);
-        res.status(500).json({ error: "Failed to export logs" });
+        res.status(500).json({ error: "Failed to fetch dates" });
     }
 });
 
-server.listen(3000, () => console.log("🚀 Server running on http://localhost:3000"));
+// Export as CSV (kept for backward compat)
+app.get("/api/logs/export/csv", authenticate, async (req, res) => {
+    try {
+        const query = buildTimeRangeQuery(req.query.start, req.query.end);
+        if (req.query.studentId) query.studentId = req.query.studentId;
+        const logs = await ViolationLog.find(query).sort({ serverTimestamp: -1 });
+
+        const headers = ["Student ID", "Event", "Detail", "Client Time", "Server Time", "Latency (ms)"];
+        const rows = logs.map((l) => [
+            escapeCsv(l.studentId),
+            escapeCsv(l.eventType),
+            escapeCsv(l.detail),
+            escapeCsv(l.clientTimestamp ? new Date(l.clientTimestamp).toISOString() : ""),
+            escapeCsv(new Date(l.serverTimestamp).toISOString()),
+            escapeCsv(l.latencyMs),
+        ].join(","));
+
+        const csv = [headers.join(","), ...rows].join("\n");
+        const date = req.query.start ? req.query.start.slice(0, 10) : "all";
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        res.setHeader("Content-Disposition", `attachment; filename=cbt-logs-${date}.csv`);
+        res.send(csv);
+    } catch (err) {
+        res.status(500).json({ error: "Failed to export" });
+    }
+});
+
+// Export as XLSX (uses JSON — frontend generates the file using SheetJS)
+app.get("/api/logs/export/xlsx-data", authenticate, async (req, res) => {
+    try {
+        const query = buildTimeRangeQuery(req.query.start, req.query.end);
+        if (req.query.studentId) query.studentId = req.query.studentId;
+        const logs = await ViolationLog.find(query).sort({ serverTimestamp: -1 });
+
+        const data = logs.map((l) => ({
+            "Student ID":    l.studentId,
+            "Event":         l.eventType,
+            "Detail":        l.detail,
+            "Client Time":   l.clientTimestamp ? new Date(l.clientTimestamp).toISOString() : "",
+            "Server Time":   new Date(l.serverTimestamp).toISOString(),
+            "Latency (ms)":  l.latencyMs,
+        }));
+
+        res.json(data);
+    } catch (err) {
+        res.status(500).json({ error: "Failed to export" });
+    }
+});
+
+// Active sessions list (admin)
+app.get("/api/sessions", authenticate, (_req, res) => {
+    res.json([...activeSessions.keys()]);
+});
+
+// ---------------------------------------------------------------------------
+// START
+// ---------------------------------------------------------------------------
+server.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
