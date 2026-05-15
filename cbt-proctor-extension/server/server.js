@@ -1,22 +1,27 @@
-const express = require("express");
+const express  = require("express");
 const mongoose = require("mongoose");
-const cors    = require("cors");
-const http    = require("http");
-const crypto  = require("crypto");
-const path    = require("path");
+const cors     = require("cors");
+const http     = require("http");
+const crypto   = require("crypto");
+const path     = require("path");
 const { Server } = require("socket.io");
 
 const ViolationLog = require("./models/ViolationLog");
 
 // ---------------------------------------------------------------------------
-// CONFIG  (use env vars in production)
+// CONFIG
 // ---------------------------------------------------------------------------
-const ADMIN_USER            = process.env.ADMIN_USER   || "admin";
-const ADMIN_PASS            = process.env.ADMIN_PASS   || "admin123";
-const TOKEN_SECRET          = process.env.TOKEN_SECRET || crypto.randomBytes(32).toString("hex");
-const PORT                  = process.env.PORT         || 3000;
-const HEARTBEAT_TIMEOUT_MS  = 45_000;
-const HEARTBEAT_CHECK_MS    = 10_000;
+const ADMIN_USER           = process.env.ADMIN_USER   || "admin";
+const ADMIN_PASS           = process.env.ADMIN_PASS   || "admin123";
+const TOKEN_SECRET         = process.env.TOKEN_SECRET || crypto.randomBytes(32).toString("hex");
+const PORT                 = process.env.PORT         || 3000;
+
+// How long without a content-script heartbeat before we classify the student.
+const CONTENT_HB_TIMEOUT_MS = 45_000;
+// How long without a bg heartbeat before we consider the bg dead too.
+// Slightly longer to account for service-worker wake-up jitter.
+const BG_HB_TIMEOUT_MS      = 55_000;
+const HEARTBEAT_CHECK_MS     = 10_000;
 
 // ---------------------------------------------------------------------------
 // APP SETUP
@@ -35,9 +40,15 @@ mongoose
     .catch((err) => console.error("❌ MongoDB Error:", err));
 
 // ---------------------------------------------------------------------------
-// SESSION STORE  { studentId → lastSeenMs }
+// SESSION STORE
+//
+// Structure per entry:
+//   contentHB       — ms timestamp of last content-script heartbeat
+//   bgHB            — ms timestamp of last background-script heartbeat (null if never received)
+//   extensionKilled — true once an EXTENSION_KILLED event arrives for this student
 // ---------------------------------------------------------------------------
 const activeSessions = new Map();
+// activeSessions: Map<studentId, { contentHB: number, bgHB: number|null, extensionKilled: boolean }>
 
 // ---------------------------------------------------------------------------
 // HELPERS
@@ -55,13 +66,8 @@ const buildTimeRangeQuery = (start, end) => {
     return Object.keys(range).length ? { serverTimestamp: range } : {};
 };
 
-/** Escape a cell value for CSV output */
 const escapeCsv = (v) => `"${(v == null ? "" : String(v)).replace(/"/g, '""')}"`;
 
-/**
- * Save a log entry to MongoDB and broadcast it via Socket.io.
- * Returns the saved document.
- */
 const persistAndBroadcast = async ({ studentId, eventType, detail, clientTimestamp }) => {
     const log = new ViolationLog({ studentId, eventType, detail, clientTimestamp });
     await log.save();
@@ -79,6 +85,18 @@ const persistAndBroadcast = async ({ studentId, eventType, detail, clientTimesta
     return log;
 };
 
+// Ensure a session record exists or create it.
+function touchSession(studentId, field = "contentHB") {
+    const now = Date.now();
+    if (activeSessions.has(studentId)) {
+        activeSessions.get(studentId)[field] = now;
+    } else {
+        const rec = { contentHB: now, bgHB: null, extensionKilled: false };
+        rec[field] = now;
+        activeSessions.set(studentId, rec);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // AUTH MIDDLEWARE
 // ---------------------------------------------------------------------------
@@ -93,28 +111,57 @@ const authenticate = (req, res, next) => {
 // ---------------------------------------------------------------------------
 io.on("connection", (socket) => {
     console.log("Dashboard connected:", socket.id);
-
-    // Send current active sessions immediately on connect
     socket.emit("active_sessions", [...activeSessions.keys()]);
 });
 
 // ---------------------------------------------------------------------------
-// HEARTBEAT WATCHDOG
+// DISCONNECT WATCHDOG
+//
+// Classifies timed-out students into one of three event types:
+//
+//   EXTENSION_KILLED  — content.js sent an explicit beacon before dying.
+//                       This is the definitive signal that the student
+//                       deliberately disabled the extension.
+//
+//   NETWORK_DROP      — both heartbeats went silent with NO kill beacon.
+//                       Most likely a network outage, browser crash, or
+//                       accidental disconnect. Treated as medium-severity.
+//
+// The key insight: when the extension is killed both the content HB and
+// the bg HB stop at the same instant, which looks identical to a network
+// drop from the server's perspective. The EXTENSION_KILLED beacon (sent
+// via navigator.sendBeacon in content.js) is the only reliable
+// distinguisher between the two.
 // ---------------------------------------------------------------------------
 setInterval(async () => {
     const now = Date.now();
-    for (const [studentId, lastSeen] of activeSessions) {
-        if (now - lastSeen <= HEARTBEAT_TIMEOUT_MS) continue;
+
+    for (const [studentId, rec] of activeSessions) {
+        // Content heartbeat still alive — nothing to do.
+        if (now - rec.contentHB <= CONTENT_HB_TIMEOUT_MS) continue;
 
         activeSessions.delete(studentId);
         io.emit("session_ended", studentId);
-        console.log(`[❌ DISCONNECT] ${studentId}`);
+
+        let eventType, detail;
+
+        if (rec.extensionKilled) {
+            // Explicit beacon was received — confirmed deliberate disable.
+            eventType = "EXTENSION_KILLED";
+            detail    = "Student disabled the Chrome extension. Proctoring is no longer active.";
+        } else {
+            // No kill beacon. Both heartbeats timed out silently → network issue.
+            eventType = "NETWORK_DROP";
+            detail    = "Heartbeat signal lost. Likely a network outage or browser crash. Extension status unknown.";
+        }
+
+        console.log(`[${eventType}] ${studentId}`);
 
         try {
             await persistAndBroadcast({
                 studentId,
-                eventType:       "CRITICAL_DISCONNECT",
-                detail:          "Signal lost. Network failed or extension disabled.",
+                eventType,
+                detail,
                 clientTimestamp: new Date().toISOString(),
             });
         } catch (err) {
@@ -128,13 +175,26 @@ setInterval(async () => {
 // ---------------------------------------------------------------------------
 app.get("/", (_req, res) => res.redirect("/exam/login.html"));
 
-// Student heartbeat
+// Content-script heartbeat (from page / tab context)
 app.post("/api/heartbeat", (req, res) => {
     const { studentId } = req.body;
     if (isValidId(studentId)) {
         const isNew = !activeSessions.has(studentId);
-        activeSessions.set(studentId, Date.now());
+        touchSession(studentId, "contentHB");
         if (isNew) io.emit("session_started", studentId);
+    }
+    res.sendStatus(200);
+});
+
+// Background-script heartbeat (from service worker — tab-independent)
+app.post("/api/bg-heartbeat", (req, res) => {
+    const { studentId } = req.body;
+    if (isValidId(studentId)) {
+        if (activeSessions.has(studentId)) {
+            activeSessions.get(studentId).bgHB = Date.now();
+        }
+        // If the session isn't in activeSessions yet (race condition at startup),
+        // the content HB will create it; we just ignore orphan bg pings.
     }
     res.sendStatus(200);
 });
@@ -143,7 +203,7 @@ app.post("/api/heartbeat", (req, res) => {
 app.post("/api/exam/start", (req, res) => {
     const { studentId } = req.body;
     if (isValidId(studentId)) {
-        activeSessions.set(studentId, Date.now());
+        touchSession(studentId, "contentHB");
         io.emit("session_started", studentId);
     }
     res.sendStatus(200);
@@ -180,13 +240,22 @@ app.post("/api/login", (req, res) => {
     res.status(401).json({ success: false });
 });
 
-// Violation report from extension
+// Violation report from extension (content.js via background.js, or direct sendBeacon)
 app.post("/api/report", async (req, res) => {
     const { studentId, eventType, detail, timestamp } = req.body;
 
     if (!isValidId(studentId)) return res.status(400).json({ error: "Login required" });
 
-    activeSessions.set(studentId, Date.now());
+    // Keep the session alive on any incoming event.
+    if (activeSessions.has(studentId)) {
+        activeSessions.get(studentId).contentHB = Date.now();
+    }
+
+    // If this is an EXTENSION_KILLED beacon, mark the session so the
+    // watchdog can log the right event type when the timeout fires.
+    if (eventType === "EXTENSION_KILLED" && activeSessions.has(studentId)) {
+        activeSessions.get(studentId).extensionKilled = true;
+    }
 
     try {
         await persistAndBroadcast({ studentId, eventType, detail, clientTimestamp: timestamp });
@@ -210,19 +279,11 @@ app.get("/api/logs", authenticate, async (req, res) => {
     }
 });
 
-// Distinct dates that have logs (for date picker in dashboard)
+// Distinct dates with event counts (for date picker)
 app.get("/api/logs/dates", authenticate, async (req, res) => {
     try {
-        // Group by date string YYYY-MM-DD
         const dates = await ViolationLog.aggregate([
-            {
-                $group: {
-                    _id: {
-                        $dateToString: { format: "%Y-%m-%d", date: "$serverTimestamp" }
-                    },
-                    count: { $sum: 1 }
-                }
-            },
+            { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$serverTimestamp" } }, count: { $sum: 1 } } },
             { $sort: { _id: -1 } }
         ]);
         res.json(dates);
@@ -231,24 +292,21 @@ app.get("/api/logs/dates", authenticate, async (req, res) => {
     }
 });
 
-// Export as CSV (kept for backward compat)
+// Export CSV
 app.get("/api/logs/export/csv", authenticate, async (req, res) => {
     try {
         const query = buildTimeRangeQuery(req.query.start, req.query.end);
         if (req.query.studentId) query.studentId = req.query.studentId;
         const logs = await ViolationLog.find(query).sort({ serverTimestamp: -1 });
 
-        const headers = ["Student ID", "Event", "Detail", "Client Time", "Server Time", "Latency (ms)"];
+        const headers = ["Student ID","Event","Detail","Client Time","Server Time","Latency (ms)"];
         const rows = logs.map((l) => [
-            escapeCsv(l.studentId),
-            escapeCsv(l.eventType),
-            escapeCsv(l.detail),
+            escapeCsv(l.studentId), escapeCsv(l.eventType), escapeCsv(l.detail),
             escapeCsv(l.clientTimestamp ? new Date(l.clientTimestamp).toISOString() : ""),
-            escapeCsv(new Date(l.serverTimestamp).toISOString()),
-            escapeCsv(l.latencyMs),
+            escapeCsv(new Date(l.serverTimestamp).toISOString()), escapeCsv(l.latencyMs),
         ].join(","));
 
-        const csv = [headers.join(","), ...rows].join("\n");
+        const csv  = [headers.join(","), ...rows].join("\n");
         const date = req.query.start ? req.query.start.slice(0, 10) : "all";
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader("Content-Disposition", `attachment; filename=cbt-logs-${date}.csv`);
@@ -258,7 +316,7 @@ app.get("/api/logs/export/csv", authenticate, async (req, res) => {
     }
 });
 
-// Export as XLSX (uses JSON — frontend generates the file using SheetJS)
+// Export XLSX (JSON payload; dashboard generates file via SheetJS)
 app.get("/api/logs/export/xlsx-data", authenticate, async (req, res) => {
     try {
         const query = buildTimeRangeQuery(req.query.start, req.query.end);
@@ -266,14 +324,13 @@ app.get("/api/logs/export/xlsx-data", authenticate, async (req, res) => {
         const logs = await ViolationLog.find(query).sort({ serverTimestamp: -1 });
 
         const data = logs.map((l) => ({
-            "Student ID":    l.studentId,
-            "Event":         l.eventType,
-            "Detail":        l.detail,
-            "Client Time":   l.clientTimestamp ? new Date(l.clientTimestamp).toISOString() : "",
-            "Server Time":   new Date(l.serverTimestamp).toISOString(),
-            "Latency (ms)":  l.latencyMs,
+            "Student ID":   l.studentId,
+            "Event":        l.eventType,
+            "Detail":       l.detail,
+            "Client Time":  l.clientTimestamp ? new Date(l.clientTimestamp).toISOString() : "",
+            "Server Time":  new Date(l.serverTimestamp).toISOString(),
+            "Latency (ms)": l.latencyMs,
         }));
-
         res.json(data);
     } catch (err) {
         res.status(500).json({ error: "Failed to export" });
