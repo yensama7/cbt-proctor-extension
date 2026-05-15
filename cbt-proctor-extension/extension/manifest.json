@@ -1,36 +1,41 @@
 {
-"manifest_version": 3,
-"name": "CBT Proctor Agent",
-"version": "1.0",
-"description": "Host-based malpractice detection agent for CBT",
+  "manifest_version": 3,
+  "name": "CBT Proctor Agent",
+  "version": "2.0",
+  "description": "Host-based malpractice detection agent for CBT",
 
-"incognito": "split",
+  "incognito": "split",
 
-"permissions": [
+  "permissions": [
     "tabs",
     "windows",
     "storage",
     "activeTab"
-],
+  ],
 
-"host_permissions": [
-    "<all_urls>"
-],
+  "host_permissions": [
+    "http://localhost:3000/*",
+    "http://127.0.0.1:3000/*"
+  ],
 
-"background": {
-    "service_worker": "service-worker.js"
-},
+  "background": {
+    "service_worker": "background.js"
+  },
 
-"content_scripts": [
+  "content_scripts": [
     {
-        "matches": ["<all_urls>"],
-        "js": ["content.js"]
+      "matches": [
+        "http://localhost:3000/exam/*",
+        "http://127.0.0.1:3000/exam/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
     }
-],
+  ],
 
-"icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
+  "icons": {
+    "16":  "icons/icon16.png",
+    "48":  "icons/icon48.png",
     "128": "icons/icon128.png"
-    }
+  }
 }
