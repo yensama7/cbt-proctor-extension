@@ -590,7 +590,7 @@ function renderSessions() {
   const ovEl   = document.getElementById("sessionsOverflow");
 
   if (shown.length === 0) {
-    listEl.innerHTML = `<div class="sessions-empty">${sessionSearchVal ? "No match for "" + escHtml(sessionSearchVal) + """ : "No active sessions"}</div>`;
+    listEl.innerHTML = `<div class="sessions-empty">${sessionSearchVal ? `No match for "${escHtml(sessionSearchVal)}"` : "No active sessions"}</div>`;
     ovEl.textContent = "";
     return;
   }
