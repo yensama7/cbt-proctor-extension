@@ -1,142 +1,174 @@
-# CBT Proctor Extension
+# CBT Proctor Extension (HBMDS)
 
-A lightweight computer-based test (CBT) proctoring system with:
+Host-Based Malpractice Detection System — a lightweight browser-extension architecture for real-time CBT malpractice detection, as described in:
 
-- **Chrome extension** for in-browser malpractice signal collection.
-- **Node.js + Express server** for ingesting events and tracking live sessions.
-- **Admin dashboard** for secure log viewing, filtering, and CSV export.
+> Uzonu, C. O., Bello, M. A., & Opeyemi, A. K. (2026). *Empirical Evaluation of a Browser Extension Architecture for Real-Time Examination Malpractice Detection.* AFIT, Kaduna.
 
 ---
 
 ## Project Structure
 
-```text
+```
 cbt-proctor-extension/
 ├── extension/
-│   ├── manifest.json
-│   ├── content.js
-│   └── service-worker.js
-└── server/
-    ├── server.js
-    ├── models/ViolationLog.js
-    └── public/
-        ├── exam/
-        │   ├── login.html
-        │   └── paper.html
-        └── admin/
-            ├── index.html
-            ├── admin.js
-            └── admin.css
+│   ├── manifest.json       — Manifest V3, scoped to localhost:3000
+│   ├── background.js       — Service worker: tab/window monitoring, Signal B ping
+│   └── content.js          — Injected into exam pages: heartbeat, violation listeners
+├── server/
+│   ├── server.js           — Express + Socket.IO + Mongoose
+│   ├── models/
+│   │   └── ViolationLog.js — MongoDB schema
+│   └── public/
+│       ├── exam/
+│       │   ├── login.html  — Student login
+│       │   └── paper.html  — Exam page (monitored)
+│       └── admin/
+│           └── index.html  — Admin dashboard (self-contained SPA)
+└── tests/
+    └── test_detection_events.py — Selenium detection verification test
 ```
 
 ---
 
-## How the System Works
+## How It Works
 
-1. A student logs in from the exam UI and starts the test.
-2. The extension reports browser/proctoring events to `POST /api/report`.
-3. The server stores events in MongoDB (`ViolationLog`) and broadcasts updates to the admin dashboard using Socket.IO.
-4. Admin logs in to the dashboard and can:
-   - View events in real time.
-   - Filter by student ID and date range.
-   - Export logs to CSV from the dashboard.
+Two independent signals are sent to the server during an active exam session:
+
+| Signal | Source | Interval | Purpose |
+|--------|--------|----------|---------|
+| A — Heartbeat | `content.js` → `POST /api/heartbeat` | 10 s | Proves exam page is open and network is up |
+| B — Ext ping | `background.js` → `POST /api/ext-ping` | 12 s | Proves extension is still enabled |
+
+A server-side watchdog checks both signals every 8 seconds:
+- Signal B dead, Signal A alive → `EXTENSION_DISABLED`
+- Both dead → `CRITICAL_DISCONNECT`
+
+Violation events are reported to `POST /api/report` and broadcast in real time to the admin dashboard via Socket.IO.
 
 ---
 
-## Admin Dashboard Features
+## Detection Events
 
-### Authentication
+| Event | Source | Trigger |
+|-------|--------|---------|
+| `TAB_SWITCH` | background.js | Tab activated to non-exam URL |
+| `UNAUTHORIZED_NAVIGATION` | background.js | Tab navigated to non-exam URL |
+| `BROWSER_OUT_OF_FOCUS` | background.js | Chrome lost OS window focus |
+| `DEVTOOLS_OPEN` | content.js | F12, Ctrl+Shift+I/J/C |
+| `WINDOW_FOCUS_LOST` | content.js | Page `blur` event |
+| `TAB_HIDDEN` | content.js | `visibilitychange` → hidden |
+| `PAGE_UNLOAD` | content.js | `pagehide` event |
+| `CLIPBOARD_ACTION` | content.js | copy / cut / paste |
+| `RESTRICTED_KEY` | content.js | Alt, Meta, Ctrl+U/S/A |
+| `RIGHT_CLICK` | content.js | `contextmenu` |
+| `SUSPICIOUS_RESIZE` | content.js | Window shrinks >150 px (DevTools heuristic) |
+| `EXTENSION_KILLED` | content.js | Extension context invalidated (watchdog beacon) |
+| `EXTENSION_DISABLED` | server watchdog | Signal B dead, Signal A recent |
+| `CRITICAL_DISCONNECT` | server watchdog | Both signals dead |
+| `EXAM_SUBMITTED` | `POST /api/logout` | Student submitted exam |
 
-- Admin login is handled via `POST /api/login`.
-- A simple bearer token is stored in `localStorage` and sent to protected routes.
+---
 
-### Log Filtering
+## Database Schema
 
-- **Student ID**: partial match filtering.
-- **Start Time / End Time**: date-range filtering.
+Student identities are never stored in plain text. The server computes a one-way SHA-256 hash of the student ID before persisting any violation record (GDPR/NDPA compliance, paper §III.D).
 
-### CSV Export
+```js
+{
+  pseudonymizedId:  String,   // SHA-256(studentId)
+  sessionId:        String,   // UUID generated per exam session
+  eventType:        String,
+  violationURL:     String,   // populated for TAB_SWITCH / UNAUTHORIZED_NAVIGATION
+  detail:           String,
+  timestamp:        Date,     // client-generated
+  serverReceivedAt: Date,     // server-generated (latency = serverReceivedAt - timestamp)
+  latencyMs:        Number,
+}
+```
 
-- Use the **Export CSV** button in admin controls.
-- If only date range is set, export is generated by `GET /api/logs/export` on the server (more efficient for large datasets).
-- If Student ID partial filtering is set, export is generated from the currently filtered table dataset to preserve expected matching behavior.
-- CSV output columns:
-  - Student ID
-  - Event
-  - Detail
-  - Time
+The session tracking Map (`studentId → { lastHeartbeat, lastExtPing }`) in memory uses plain IDs for real-time monitoring; only the MongoDB log layer pseudonymizes.
 
 ---
 
 ## Requirements
 
-- **Node.js** 18+ recommended
-- **MongoDB** running locally on `mongodb://127.0.0.1:27017`
-- **Google Chrome** (for loading the extension)
+- Node.js 18+
+- MongoDB running on `mongodb://127.0.0.1:27017`
+- Google Chrome (to load the extension)
+- Python 3.9+ and `pip install selenium requests` (for tests only)
 
 ---
 
 ## Setup & Run
 
-### 1) Install server dependencies
+### 1. Install server dependencies
 
 ```bash
-cd cbt-proctor-extension/server
-npm install
+cd server && npm install
 ```
 
-### 2) Start MongoDB
-
-Make sure a local MongoDB instance is running:
+### 2. Start MongoDB
 
 ```bash
 mongod
 ```
 
-### 3) Run the server
+### 3. Start the server
 
 ```bash
-cd cbt-proctor-extension/server
-node server.js
+node server/server.js
 ```
 
-Server runs at:
+Runs at `http://localhost:3000`. Default admin credentials: `admin` / `admin123` (override with `ADMIN_USER` / `ADMIN_PASS` env vars).
 
-- `http://localhost:3000`
+### 4. Load the Chrome extension
 
-### 4) Load the Chrome extension
+1. Go to `chrome://extensions/`
+2. Enable **Developer mode**
+3. Click **Load unpacked** → select the `extension/` folder
 
-1. Open Chrome and go to `chrome://extensions/`
-2. Enable **Developer mode**.
-3. Click **Load unpacked**.
-4. Select the folder: `cbt-proctor-extension/extension`.
+### 5. Open the exam UI
 
-### 5) Open UIs
+- Student: `http://localhost:3000/exam/login.html`
+- Admin: `http://localhost:3000/admin/index.html`
 
-- Student login: `http://localhost:3000/exam/login.html`
-- Admin dashboard: `http://localhost:3000/admin/index.html`
-
-Default admin credentials (from current server code):
-
-- Username: `admin`
-- Password: `admin123`
+The exam page checks for the extension handshake (`data-hbmds-active` attribute set by `content.js`). If the extension is absent (e.g. incognito mode without permission), the exam content is blocked.
 
 ---
 
-## Important API Endpoints
+## API Endpoints
 
-- `POST /api/login` – admin login
-- `GET /api/logs` – fetch logs (authenticated; optional `start` / `end` query)
-- `GET /api/logs/export` – CSV export (authenticated; optional `start` / `end` query)
-- `POST /api/report` – receive extension malpractice events
-- `POST /api/heartbeat` – track active student session state
-- `POST /api/logout` – mark exam submitted and stop heartbeat tracking
+| Method | Path | Auth | Purpose |
+|--------|------|------|---------|
+| `POST` | `/api/login` | — | Admin login; returns Bearer token |
+| `POST` | `/api/heartbeat` | — | Signal A (content.js) |
+| `POST` | `/api/ext-ping` | — | Signal B (background.js) |
+| `POST` | `/api/exam/start` | — | Register session at login |
+| `POST` | `/api/report` | — | Violation event |
+| `POST` | `/api/logout` | — | Exam submitted |
+| `GET` | `/api/logs` | Bearer | Fetch logs (`start`, `end`, `studentId` query params) |
+| `GET` | `/api/logs/dates` | Bearer | Distinct dates with counts |
+| `GET` | `/api/logs/export/xlsx-data` | Bearer | XLSX export data |
+| `GET` | `/api/sessions` | Bearer | Live session snapshot |
+
+**Note:** `?studentId=` query params are hashed server-side before querying `pseudonymizedId`.
 
 ---
 
-## Notes for Development
+## Running the Detection Tests
 
-- Real-time updates are pushed via Socket.IO channel: `new_violation`.
-- Dashboard table rendering in `admin.js` uses `DocumentFragment` for smoother updates under heavier log volumes.
-- Date range query parsing is centralized in `buildTimeRangeQuery()` in `server.js` to avoid duplicated filtering logic.
+```bash
+cd tests
+pip install selenium requests
+python test_detection_events.py
+```
 
+The script launches Chrome with the extension loaded, logs in a test student, triggers all 11 detection events, and verifies each one appears in `/api/logs`. It reports a detection rate and mean latency against the paper's 450 ms ± 50 ms benchmark.
+
+Environment variables: `SERVER`, `ADMIN_USER`, `ADMIN_PASS`, `STUDENT_ID`, `EXTENSION_PATH`.
+
+---
+
+## Offline Resilience
+
+`content.js` maintains an IndexedDB store (`hbmds_offline`) as a local violation queue. If a `sendBeacon` fails during a network outage, the record is queued and flushed to `POST /api/report` on the next successful heartbeat cycle. This ensures no forensic events are lost during transient connectivity failures (paper §III.A).

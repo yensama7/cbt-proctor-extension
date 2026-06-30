@@ -10,7 +10,8 @@
     "tabs",
     "windows",
     "storage",
-    "activeTab"
+    "activeTab",
+    "alarms"
   ],
 
   "host_permissions": [

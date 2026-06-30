@@ -246,6 +246,15 @@
 </head>
 <body>
 
+<!-- EXTENSION GATE: shown if the HBMDS extension handshake is not detected -->
+<div id="extensionGate" style="display:none;position:fixed;inset:0;background:#1a3a2a;color:#fff;z-index:9999;align-items:center;justify-content:center;flex-direction:column;gap:16px;text-align:center;padding:24px;">
+  <div style="font-family:'Syne',sans-serif;font-size:22px;font-weight:800;">Extension Required</div>
+  <div style="font-family:'DM Mono',monospace;font-size:13px;color:rgba(255,255,255,0.7);max-width:420px;line-height:1.6;">
+    The CBT Proctor extension is not active in this window.<br>
+    Please open this page in a standard Chrome window with the HBMDS extension enabled.
+  </div>
+</div>
+
 <!-- BLUR overlay when focus lost -->
 <div id="blurOverlay">
   <h2>⚠ Return to Exam</h2>
@@ -301,6 +310,17 @@
 const studentId = localStorage.getItem("cbt_student_id");
 if (!studentId) { window.location.href = "login.html"; }
 document.getElementById("studentBadge").textContent = studentId;
+
+// ---------- EXTENSION HANDSHAKE ----------
+// content.js sets data-hbmds-active on <html> after it initialises.
+// Wait 2s for the extension to inject and set the flag; block access if absent.
+setTimeout(() => {
+  if (document.documentElement.getAttribute("data-hbmds-active") !== "true") {
+    const gate = document.getElementById("extensionGate");
+    gate.style.display = "flex";
+    document.getElementById("questionsContainer").style.visibility = "hidden";
+  }
+}, 2000);
 
 // ---------- QUESTIONS ----------
 const questions = [

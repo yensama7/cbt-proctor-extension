@@ -1,20 +1,19 @@
 const mongoose = require("mongoose");
 
 const ViolationLogSchema = new mongoose.Schema({
-    studentId:       { type: String, required: true, index: true },
+    pseudonymizedId: { type: String, required: true, index: true },
+    sessionId:       { type: String, default: "" },
     eventType:       { type: String, required: true },
+    violationURL:    { type: String, default: "" },
     detail:          { type: String, default: "" },
-    clientTimestamp: { type: Date, default: null },
-    serverTimestamp: { type: Date, default: Date.now, index: true },
-    // Latency in milliseconds: serverTimestamp - clientTimestamp
+    timestamp:       { type: Date, default: null },            // client-generated
+    serverReceivedAt:{ type: Date, default: Date.now, index: true },
     latencyMs:       { type: Number, default: null },
 });
 
-// Auto-compute latency before saving
 ViolationLogSchema.pre("save", function (next) {
-    if (this.clientTimestamp && this.serverTimestamp) {
-        this.latencyMs = this.serverTimestamp - new Date(this.clientTimestamp).getTime();
-    }
+    if (this.timestamp && this.serverReceivedAt)
+        this.latencyMs = this.serverReceivedAt - new Date(this.timestamp).getTime();
     next();
 });
 
