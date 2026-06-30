@@ -206,11 +206,13 @@ def test_clipboard_action(driver, token):
 
 
 def test_devtools_open(driver, token):
-    """Press F12 — content.js DEVTOOLS_OPEN."""
+    """Synthetic F12 keydown — content.js DEVTOOLS_OPEN."""
     since = time.time()
-    body = driver.find_element(By.TAG_NAME, "body")
-    body.click()
-    body.send_keys(Keys.F12)
+    # ponytail: Chrome intercepts F12 before page scripts see it — dispatch synthetic event
+    driver.execute_script(
+        "document.dispatchEvent(new KeyboardEvent('keydown',"
+        " {key:'F12',code:'F12',keyCode:123,bubbles:true,cancelable:true}));"
+    )
     return assert_event(token, "DEVTOOLS_OPEN", since)
 
 
@@ -225,10 +227,15 @@ def test_right_click(driver, token):
 def test_suspicious_resize(driver, token):
     """Shrink window by >150px — content.js SUSPICIOUS_RESIZE."""
     since = time.time()
-    size = driver.get_window_size()
-    driver.set_window_size(size["width"] - 200, size["height"] - 200)
+    # ponytail: set_window_size fails on maximized window in ChromeDriver 149 — use CDP
+    wid = driver.execute_cdp_cmd("Browser.getWindowForTarget", {})["windowId"]
+    bounds = driver.execute_cdp_cmd("Browser.getWindowBounds", {"windowId": wid})["bounds"]
+    w, h = bounds.get("width", 1200), bounds.get("height", 800)
+    driver.execute_cdp_cmd("Browser.setWindowBounds",
+        {"windowId": wid, "bounds": {"windowState": "normal", "width": w - 200, "height": h - 200}})
     time.sleep(0.5)
-    driver.set_window_size(size["width"], size["height"])
+    driver.execute_cdp_cmd("Browser.setWindowBounds",
+        {"windowId": wid, "bounds": {"windowState": "normal", "width": w, "height": h}})
     return assert_event(token, "SUSPICIOUS_RESIZE", since)
 
 
