@@ -20,6 +20,7 @@ import sys
 import time
 import datetime
 import hashlib
+import subprocess
 import requests
 
 from selenium import webdriver
@@ -156,16 +157,20 @@ def test_unauthorized_navigation(driver, token):
 def test_browser_out_of_focus(driver, token):
     """Minimise Chrome — background.js BROWSER_OUT_OF_FOCUS via chrome.windows.onFocusChanged."""
     since = time.time()
-    # Open and immediately minimise a secondary OS window to steal focus
-    driver.execute_script("window.open('about:blank', '_blank');")
-    time.sleep(0.5)
-    handles = driver.window_handles
-    driver.switch_to.window(handles[-1])
-    driver.minimize_window()
-    time.sleep(1)
-    driver.close()
-    driver.switch_to.window(handles[0])
-    driver.maximize_window()
+    try:
+        driver.minimize_window()
+        time.sleep(1.5)
+        driver.maximize_window()
+    except Exception:
+        # ponytail: ChromeDriver 149 on Windows can't minimize via WebDriver — shell fallback
+        subprocess.run(["powershell", "-Command",
+            "(New-Object -ComObject Shell.Application).MinimizeAll()"],
+            capture_output=True, timeout=3)
+        time.sleep(1.5)
+        subprocess.run(["powershell", "-Command",
+            "(New-Object -ComObject Shell.Application).UndoMinimizeAll()"],
+            capture_output=True, timeout=3)
+        time.sleep(0.5)
     return assert_event(token, "BROWSER_OUT_OF_FOCUS", since)
 
 
