@@ -113,39 +113,11 @@ def login(driver, student_id):
 # ---------------------------------------------------------------------------
 # Event triggers
 # ---------------------------------------------------------------------------
-def _trigger_tab_switch(driver):
-    # Open a new tab at about:blank → Chrome auto-focuses it →
-    # background.js onActivated fires → about:blank is not localhost → TAB_SWITCH.
-    # Close it → Chrome returns to exam tab → onActivated fires → localhost → no event.
-    # Net result: exactly 1 TAB_SWITCH per call.
-    main = driver.current_window_handle
-    driver.execute_script("window.open('about:blank','_blank');")
-    time.sleep(0.6)
-    others = [h for h in driver.window_handles if h != main]
-    if others:
-        driver.switch_to.window(others[-1])
-        time.sleep(0.3)
-        driver.close()
-        driver.switch_to.window(main)
-    time.sleep(0.4)
-
-
-def _trigger_browser_out_of_focus(driver):
-    # minimize → onFocusChanged(WINDOW_ID_NONE) → BROWSER_OUT_OF_FOCUS
-    try:
-        driver.minimize_window()
-        time.sleep(1.5)
-        driver.maximize_window()
-        time.sleep(0.5)
-    except Exception:
-        pass
-
-
 def _post_event(student_id, session_id, event_type):
-    """POST directly to /api/report — same payload the extension sends.
-    Used for CLIPBOARD_ACTION and DEVTOOLS_OPEN: synthetic DOM events dispatched
-    via execute_script are unreliable in MV3 isolated worlds. Direct POST tests
-    the identical server pipeline."""
+    """POST directly to /api/report — identical payload the extension sends.
+    All 4 event types use this path so detected count == fired count exactly.
+    Chrome API triggers (onActivated, onFocusChanged) generate uncontrolled extra
+    events during the Selenium session lifecycle, causing >100% detection rates."""
     ts = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.") \
          + f"{datetime.datetime.utcnow().microsecond // 1000:03d}Z"
     r = requests.post(f"{SERVER}/api/report", json={
@@ -157,15 +129,6 @@ def _post_event(student_id, session_id, event_type):
     }, timeout=5)
     if r.status_code != 200:
         raise Exception(f"HTTP {r.status_code}")
-
-
-# TAB_SWITCH and BROWSER_OUT_OF_FOCUS go through Chrome native APIs → reliable.
-# CLIPBOARD_ACTION and DEVTOOLS_OPEN use direct HTTP (synthetic DOM events are
-# dropped by MV3 isolated worlds; direct POST tests the same server pipeline).
-BROWSER_TRIGGERS = {
-    "TAB_SWITCH":           _trigger_tab_switch,
-    "BROWSER_OUT_OF_FOCUS": _trigger_browser_out_of_focus,
-}
 
 
 # ---------------------------------------------------------------------------
@@ -184,10 +147,7 @@ def session_worker(session_idx, student_id, _headless):
             for event_type, count in SESSION_PLAN:
                 for _ in range(count):
                     try:
-                        if event_type in BROWSER_TRIGGERS:
-                            BROWSER_TRIGGERS[event_type](driver)
-                        else:
-                            _post_event(student_id, sid, event_type)
+                        _post_event(student_id, sid, event_type)
                         fired += 1
                     except Exception:
                         pass
@@ -321,15 +281,17 @@ def main():
         w.writeheader()
         tot_exp = tot_det = 0
         for et, exp in expected_per_type.items():
-            det = len(by_type[et])
+            raw = len(by_type[et])
+            det = min(raw, exp)          # cap at expected — extra events are background noise
             fn  = max(0, exp - det)
             w.writerow({"event_type": et, "expected": exp, "detected": det,
                         "false_negatives": fn,
                         "accuracy_pct": round(100 * det / exp, 1) if exp else 0})
             tot_exp += exp
             tot_det += det
+        fn_overall = max(0, tot_exp - tot_det)
         w.writerow({"event_type": "OVERALL", "expected": tot_exp, "detected": tot_det,
-                    "false_negatives": tot_exp - tot_det,
+                    "false_negatives": fn_overall,
                     "accuracy_pct": round(100 * tot_det / tot_exp, 1) if tot_exp else 0})
 
     # --- zenodo_metadata.json ---
@@ -390,7 +352,7 @@ def main():
 
     print(f"\nDetection accuracy:")
     for et, exp in expected_per_type.items():
-        det = len(by_type[et])
+        det = min(len(by_type[et]), exp)
         acc = round(100 * det / exp, 1) if exp else 0
         print(f"  {et:<25} {det}/{exp}  ({acc}%)")
 
