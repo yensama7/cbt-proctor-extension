@@ -84,7 +84,7 @@ body {
 .login-err.show { display:block; }
 
 /* ===== APP SHELL ===== */
-#app { display: flex; flex-direction: column; height: 100vh; display: none; }
+#app { flex-direction: column; height: 100vh; display: none; }
 
 /* TOP BAR */
 .topbar {
@@ -121,6 +121,7 @@ body {
   overflow: hidden;
 }
 .panel-header {
+  flex-shrink: 0;
   padding: 16px 18px 12px;
   border-bottom: 1px solid var(--border);
   font-family: var(--font-mono);
@@ -131,7 +132,7 @@ body {
 .panel-header span { font-size: 14px; font-weight: 700; font-family: var(--font-sans); color: var(--text); }
 
 /* Stat cards */
-.stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 14px; }
+.stats-grid { flex-shrink: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 14px; }
 .stat-card {
   background: var(--s2); border: 1px solid var(--border);
   border-radius: 8px; padding: 12px;
@@ -144,9 +145,10 @@ body {
 .stat-val.blue   { color: var(--blue); }
 
 /* Active sessions */
-.sessions-list { flex: 1; overflow-y: auto; padding: 0 14px 14px; }
+.sessions-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 14px 14px; }
 /* Session summary counts (replaces scrollable list for scale) */
 .session-counts {
+  flex-shrink: 0;
   display: grid; grid-template-columns: 1fr 1fr 1fr;
   gap: 6px; padding: 10px 14px;
 }
@@ -189,7 +191,7 @@ body {
 }
 
 /* DATE PICKER */
-.date-section { padding: 14px; border-top: 1px solid var(--border); }
+.date-section { flex-shrink: 0; padding: 14px; border-top: 1px solid var(--border); }
 .date-label  { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:.1em; color:var(--muted2); margin-bottom:8px; }
 .date-select {
   width: 100%; padding: 8px 10px;
@@ -211,8 +213,9 @@ body {
 
 /* FILTER BAR */
 .filter-bar {
+  flex-shrink: 0;
   padding: 14px;
-  border-bottom: 1px solid var(--border);
+  border-top: 1px solid var(--border);
 }
 .filter-input {
   width: 100%; padding: 8px 10px;
@@ -440,7 +443,7 @@ body {
           <div class="sc-label">Lost</div>
         </div>
       </div>
-      <div class="sessions-list" id="sessionsList" style="max-height:160px;overflow-y:auto;padding:0 14px 8px"></div>
+      <div class="sessions-list" id="sessionsList"></div>
 
       <!-- Date filter + export -->
       <div class="date-section">

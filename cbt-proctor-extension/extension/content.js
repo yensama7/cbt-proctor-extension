@@ -247,3 +247,13 @@ function attachContextMenuBlocker() {
         reportViolation("RIGHT_CLICK", "Right-click attempted");
     });
 }
+
+// paper.html dispatches this when the student submits — clear all state so
+// background.js stops monitoring after the exam ends.
+window.addEventListener("cbt_exam_submitted", () => {
+    clearInterval(heartbeatTimer);
+    clearInterval(contextPoller);
+    localStorage.removeItem("cbt_session_id");
+    document.documentElement.removeAttribute("data-hbmds-active");
+    try { chrome.runtime.sendMessage({ type: "RESET_STATE" }); } catch {}
+});

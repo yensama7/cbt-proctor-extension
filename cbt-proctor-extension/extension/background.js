@@ -43,9 +43,7 @@ async function sendViolation(eventType, detail, overrideId = null, sessionId = n
                 timestamp: new Date().toISOString(),
             }),
         });
-    } catch (err) {
-        console.error("[CBT bg] sendViolation failed:", err);
-    }
+    } catch { /* server unreachable — session watchdog will classify the dropout */ }
 }
 
 // ---------------------------------------------------------------------------
