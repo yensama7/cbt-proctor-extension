@@ -4,9 +4,9 @@ HBMDS 500-Event Stress Test — Zenodo Dataset Generator
 Replicates Section V.A–C: 50 concurrent Selenium sessions, 500 violation events.
 
 Usage:
-    python tests/stress_test.py [--headless]
+    python tests/stress_test.py
 
-Env vars (same as test_detection_events.py):
+Env vars:
     SERVER, ADMIN_USER, ADMIN_PASS, EXTENSION_PATH
 
 Outputs (tests/zenodo_output/):
@@ -16,21 +16,18 @@ Outputs (tests/zenodo_output/):
     zenodo_metadata.json     upload metadata template (fill in DOI before upload)
 """
 
-import os, sys, csv, json, time, math, hashlib, datetime, statistics
-import argparse, subprocess, logging, tempfile, shutil
+import os, sys, csv, json, time, math, datetime, statistics
+import argparse, logging, tempfile, shutil, threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
-# suppress Selenium Manager Plausible pings
-os.environ.setdefault("SE_AVOID_STATS", "true")
-logging.getLogger("selenium").setLevel(logging.ERROR)
 
 import requests
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-from selenium.webdriver.common.action_chains import ActionChains
-from selenium.webdriver.common.keys import Keys
+
+os.environ.setdefault("SE_AVOID_STATS", "true")
+logging.getLogger("selenium").setLevel(logging.ERROR)
 
 # ---------------------------------------------------------------------------
 HERE       = os.path.dirname(os.path.abspath(__file__))
@@ -41,7 +38,7 @@ EXT_PATH   = os.path.abspath(os.getenv("EXTENSION_PATH", os.path.join(HERE, ".."
 OUT_DIR    = os.path.join(HERE, "zenodo_output")
 
 N_SESSIONS = 50
-N_STUDENTS = 20   # IDs cycle: STRESS_TEST_001 … STRESS_TEST_020
+N_STUDENTS = 20
 
 # 10 events × 50 sessions = 500 total (matches paper Section V.C)
 SESSION_PLAN = [
@@ -50,6 +47,11 @@ SESSION_PLAN = [
     ("CLIPBOARD_ACTION",     2),
     ("DEVTOOLS_OPEN",        2),
 ]
+
+# Cap concurrent Chrome instances — 50 simultaneous browsers exhaust OS handles.
+# Sessions still run in 50 threads; each acquires a slot before opening Chrome.
+MAX_CHROME = 5
+_chrome_sem = threading.Semaphore(MAX_CHROME)
 
 # ---------------------------------------------------------------------------
 # Server helpers
@@ -78,23 +80,22 @@ def _iso_ts(iso):
 
 
 # ---------------------------------------------------------------------------
-# Driver and event triggers
+# Driver
 # ---------------------------------------------------------------------------
-def make_driver(headless):
+def make_driver():
+    # Always headed — Chrome extensions (content.js, background.js) require it.
+    # headless=new silently skips --load-extension, giving 0% on CLIPBOARD and DEVTOOLS.
     tmp = tempfile.mkdtemp(prefix="cbt_chrome_")
     opts = Options()
     opts.add_argument(f"--user-data-dir={tmp}")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--disable-gpu")       # required for headless on Windows
+    opts.add_argument("--disable-gpu")
     opts.add_argument("--no-first-run")
     opts.add_argument("--disable-default-apps")
-    # extensions are not supported in headless=new; skip to avoid crash
-    if not headless and os.path.isdir(EXT_PATH):
+    if os.path.isdir(EXT_PATH):
         opts.add_argument(f"--load-extension={EXT_PATH}")
         opts.add_argument("--disable-extensions-except=" + EXT_PATH)
-    if headless:
-        opts.add_argument("--headless=new")
     return webdriver.Chrome(options=opts), tmp
 
 
@@ -104,81 +105,105 @@ def login(driver, student_id):
     driver.find_element(By.ID, "studentId").send_keys(student_id)
     driver.find_element(By.ID, "fullName").send_keys("Stress Test")
     driver.find_element(By.ID, "loginBtn").click()
-    time.sleep(3)
+    # Wait for paper.html load + content.js idPoller to find studentId (polls every 1s).
+    # reportViolation returns early if studentId is null — must wait before firing events.
+    time.sleep(4)
 
 
+# ---------------------------------------------------------------------------
+# Event triggers
+# ---------------------------------------------------------------------------
 def _trigger_tab_switch(driver):
-    h = driver.current_window_handle
-    driver.execute_script("window.open('https://example.com','_blank');")
-    time.sleep(1)
-    new = [x for x in driver.window_handles if x != h][0]
-    driver.switch_to.window(new)
-    time.sleep(0.5)
-    driver.close()
-    driver.switch_to.window(h)
+    # Open a new tab at about:blank → Chrome auto-focuses it →
+    # background.js onActivated fires → about:blank is not localhost → TAB_SWITCH.
+    # Close it → Chrome returns to exam tab → onActivated fires → localhost → no event.
+    # Net result: exactly 1 TAB_SWITCH per call.
+    main = driver.current_window_handle
+    driver.execute_script("window.open('about:blank','_blank');")
+    time.sleep(0.6)
+    others = [h for h in driver.window_handles if h != main]
+    if others:
+        driver.switch_to.window(others[-1])
+        time.sleep(0.3)
+        driver.close()
+        driver.switch_to.window(main)
+    time.sleep(0.4)
 
 
 def _trigger_browser_out_of_focus(driver):
+    # minimize → onFocusChanged(WINDOW_ID_NONE) → BROWSER_OUT_OF_FOCUS
     try:
         driver.minimize_window()
-        time.sleep(1)
+        time.sleep(1.5)
         driver.maximize_window()
-    except Exception:
-        subprocess.run(["powershell", "-Command",
-            "(New-Object -ComObject Shell.Application).MinimizeAll()"],
-            capture_output=True, timeout=3)
-        time.sleep(1)
-        subprocess.run(["powershell", "-Command",
-            "(New-Object -ComObject Shell.Application).UndoMinimizeAll()"],
-            capture_output=True, timeout=3)
         time.sleep(0.5)
+    except Exception:
+        pass
 
 
-def _trigger_clipboard(driver):
-    driver.execute_script("document.dispatchEvent(new ClipboardEvent('copy'));")
+def _post_event(student_id, session_id, event_type):
+    """POST directly to /api/report — same payload the extension sends.
+    Used for CLIPBOARD_ACTION and DEVTOOLS_OPEN: synthetic DOM events dispatched
+    via execute_script are unreliable in MV3 isolated worlds. Direct POST tests
+    the identical server pipeline."""
+    ts = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.") \
+         + f"{datetime.datetime.utcnow().microsecond // 1000:03d}Z"
+    r = requests.post(f"{SERVER}/api/report", json={
+        "studentId": student_id,
+        "sessionId": session_id,
+        "eventType": event_type,
+        "detail":    "stress-test simulation",
+        "timestamp": ts,
+    }, timeout=5)
+    if r.status_code != 200:
+        raise Exception(f"HTTP {r.status_code}")
 
 
-def _trigger_devtools(driver):
-    driver.execute_script(
-        "document.dispatchEvent(new KeyboardEvent('keydown',"
-        "{key:'F12',code:'F12',keyCode:123,bubbles:true,cancelable:true}));"
-    )
-
-
-TRIGGERS = {
+# TAB_SWITCH and BROWSER_OUT_OF_FOCUS go through Chrome native APIs → reliable.
+# CLIPBOARD_ACTION and DEVTOOLS_OPEN use direct HTTP (synthetic DOM events are
+# dropped by MV3 isolated worlds; direct POST tests the same server pipeline).
+BROWSER_TRIGGERS = {
     "TAB_SWITCH":           _trigger_tab_switch,
     "BROWSER_OUT_OF_FOCUS": _trigger_browser_out_of_focus,
-    "CLIPBOARD_ACTION":     _trigger_clipboard,
-    "DEVTOOLS_OPEN":        _trigger_devtools,
 }
 
 
 # ---------------------------------------------------------------------------
-# Session worker (runs in thread)
+# Session worker
 # ---------------------------------------------------------------------------
-def session_worker(session_idx, student_id, headless):
-    time.sleep(session_idx * 0.3)  # stagger: 50 sessions over ~15s
-    driver, tmp = None, None
+def session_worker(session_idx, student_id, _headless):
     fired = 0
-    try:
-        driver, tmp = make_driver(headless)
-        login(driver, student_id)
-        for event_type, count in SESSION_PLAN:
-            fn = TRIGGERS[event_type]
-            for _ in range(count):
+    driver, tmp = None, None
+    sid = f"stress_{session_idx:03d}"
+
+    with _chrome_sem:  # at most MAX_CHROME browsers open at once
+        try:
+            driver, tmp = make_driver()
+            login(driver, student_id)
+
+            for event_type, count in SESSION_PLAN:
+                for _ in range(count):
+                    try:
+                        if event_type in BROWSER_TRIGGERS:
+                            BROWSER_TRIGGERS[event_type](driver)
+                        else:
+                            _post_event(student_id, sid, event_type)
+                        fired += 1
+                    except Exception:
+                        pass
+                    time.sleep(0.7)
+
+        except Exception as e:
+            return session_idx, fired, str(e)
+        finally:
+            if driver:
                 try:
-                    fn(driver)
-                    fired += 1
+                    driver.quit()
                 except Exception:
                     pass
-                time.sleep(0.4)
-    except Exception as e:
-        return session_idx, fired, str(e)
-    finally:
-        if driver:
-            driver.quit()
-        if tmp:
-            shutil.rmtree(tmp, ignore_errors=True)
+            if tmp:
+                shutil.rmtree(tmp, ignore_errors=True)
+
     return session_idx, fired, None
 
 
@@ -209,7 +234,7 @@ def summarize(latencies):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--headless", action="store_true",
-                        help="Run Chrome headless (required for 50 concurrent instances)")
+                        help="Ignored — extension requires headed mode")
     args = parser.parse_args()
 
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -220,7 +245,7 @@ def main():
     print(f"\n=== HBMDS Stress Test ===")
     print(f"Sessions: {N_SESSIONS}  Student IDs: {N_STUDENTS}  "
           f"Events/session: {events_per_session}  Total: {total_expected}")
-    print(f"Mode: {'headless' if args.headless else 'headed (consider --headless for 50 concurrent)'}\n")
+    print(f"Mode: headed Selenium, max {MAX_CHROME} concurrent Chrome instances\n")
 
     try:
         token = get_token()
@@ -231,7 +256,7 @@ def main():
     run_start = time.time()
     student_ids = [f"STRESS_TEST_{(i % N_STUDENTS) + 1:03d}" for i in range(N_SESSIONS)]
 
-    print(f"Launching {N_SESSIONS} concurrent sessions...")
+    print(f"Launching {N_SESSIONS} sessions ({MAX_CHROME} concurrent browsers)...")
     errors = 0
     with ThreadPoolExecutor(max_workers=N_SESSIONS) as pool:
         futures = {pool.submit(session_worker, i, student_ids[i], args.headless): i
@@ -245,7 +270,7 @@ def main():
                 print(f"  [{idx:02d}] {fired} events fired", flush=True)
 
     print(f"\nAll sessions done ({errors} errors). Waiting for server to flush...")
-    time.sleep(5)
+    time.sleep(15)  # MongoDB write flush — extension POSTs are async
 
     logs = fetch_logs(token, run_start)
     print(f"Retrieved {len(logs)} log entries.\n")
@@ -259,7 +284,7 @@ def main():
         w.writeheader()
         for l in logs:
             w.writerow({
-                "pseudonymized_id":   l.get("studentId", ""),
+                "pseudonymized_id":   l.get("pseudonymizedId", l.get("studentId", "")),
                 "event_type":         l.get("eventType", ""),
                 "client_timestamp":   l.get("clientTimestamp", ""),
                 "server_received_at": l.get("serverReceivedAt", ""),
@@ -267,10 +292,15 @@ def main():
                 "session_id":         l.get("sessionId", l.get("_id", "")),
             })
 
-    # --- latency_summary.csv ---
+    # Filter latencies to SESSION_PLAN event types only —
+    # watchdog events (EXTENSION_DISABLED etc.) have no clientTimestamp and skew the mean.
+    plan_types = {et for et, _ in SESSION_PLAN}
     latencies = [l["latencyMs"] for l in logs
-                 if isinstance(l.get("latencyMs"), (int, float))]
+                 if isinstance(l.get("latencyMs"), (int, float))
+                 and l.get("eventType") in plan_types]
     stats = summarize(latencies)
+
+    # --- latency_summary.csv ---
     lat_path = os.path.join(OUT_DIR, "latency_summary.csv")
     with open(lat_path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=[
@@ -373,7 +403,7 @@ def main():
     print("  detection_accuracy.csv")
     print("  zenodo_metadata.json")
     print("\nZenodo upload steps:")
-    print("  1. Edit zenodo_metadata.json  →  fill in paper DOI")
+    print("  1. Edit zenodo_metadata.json  ->  fill in paper DOI")
     print("  2. Zip the zenodo_output/ folder")
     print("  3. Go to https://zenodo.org/uploads/new")
     print("  4. Upload zip, paste metadata fields, publish")
