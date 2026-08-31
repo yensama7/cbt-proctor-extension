@@ -8,7 +8,7 @@ if (window.location.href.includes("login.html")) {
     throw new Error("[CBT Proctor] Disabled on login page.");
 }
 
-const SERVER_BASE = "http://localhost:3000";
+let SERVER_BASE    = DEFAULT_SERVER_BASE; // resolved from managed storage at bootstrap (config.js)
 let studentId      = null;
 let sessionId      = null;
 let heartbeatTimer = null;
@@ -43,15 +43,23 @@ async function flushOfflineQueue() {
     });
     if (!vals.length) return;
     try {
-        for (const rec of vals) {
-            await fetch(`${SERVER_BASE}/api/report`, {
+        // Batched POSTs (server caps 100/batch). sentAt = flush time so the
+        // server measures real transport latency, not the offline queueing
+        // delay (improve.md §4B). Clear only after every chunk is accepted —
+        // a rare duplicate beats losing forensic events.
+        for (let i = 0; i < vals.length; i += 100) {
+            const res = await fetch(`${SERVER_BASE}/api/report`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(rec),
+                body: JSON.stringify({
+                    studentId, sessionId,
+                    sentAt: new Date().toISOString(),
+                    events: vals.slice(i, i + 100),
+                }),
                 keepalive: true,
             });
+            if (!res.ok) return; // retry whole queue next heartbeat
         }
-        // Clear only after all succeed
         offlineDB.transaction("queue", "readwrite").objectStore("queue").clear();
     } catch { /* network still down — retry next heartbeat */ }
 }
@@ -75,8 +83,10 @@ const idPoller = setInterval(async () => {
         console.log("[CBT Proctor] Active for:", studentId, "session:", sessionId);
         chrome.storage.local.set({ studentId });
         clearInterval(idPoller);
-        offlineDB = await openOfflineDB();
+        SERVER_BASE = await getServerBase();
+        offlineDB   = await openOfflineDB();
         startHeartbeat();
+        startBatchFlusher();
         startContextWatchdog();
         attachProctoringListeners();
         return;
@@ -140,7 +150,34 @@ function startContextWatchdog() {
 
 // ---------------------------------------------------------------------------
 // VIOLATION REPORTING
+//
+// High-frequency events (key mashing, resize storms, focus flapping) are
+// buffered and flushed every few seconds via sendBeacon so they can't spam
+// /api/report (improve.md §1B). Critical events still go out immediately.
 // ---------------------------------------------------------------------------
+const BATCH_FLUSH_MS  = 3_000;
+const CRITICAL_EVENTS = new Set(["DEVTOOLS_OPEN", "PAGE_UNLOAD", "TAB_HIDDEN", "EXTENSION_KILLED"]);
+const eventBuffer     = [];
+let   batchTimer      = null;
+
+function startBatchFlusher() {
+    batchTimer = setInterval(flushEventBuffer, BATCH_FLUSH_MS);
+    window.addEventListener("pagehide", flushEventBuffer); // don't lose the tail on unload
+}
+
+function flushEventBuffer() {
+    if (!eventBuffer.length) return;
+    const batch = eventBuffer.splice(0, eventBuffer.length);
+    const body  = JSON.stringify({
+        studentId, sessionId,
+        sentAt: new Date().toISOString(),
+        events: batch,
+    });
+    if (!navigator.sendBeacon(`${SERVER_BASE}/api/report`, new Blob([body], { type: "application/json" }))) {
+        batch.forEach(enqueueOffline); // beacon queue full / network down — persist locally
+    }
+}
+
 function reportViolation(type, detail, violationURL = "") {
     if (!studentId) return;
 
@@ -148,6 +185,11 @@ function reportViolation(type, detail, violationURL = "") {
         studentId, sessionId, eventType: type, detail, violationURL,
         timestamp: new Date().toISOString(),
     };
+
+    if (!CRITICAL_EVENTS.has(type)) {
+        eventBuffer.push(payload);
+        return;
+    }
 
     try {
         chrome.runtime.sendMessage({ type, studentId, sessionId, detail, violationURL });
@@ -253,6 +295,8 @@ function attachContextMenuBlocker() {
 window.addEventListener("cbt_exam_submitted", () => {
     clearInterval(heartbeatTimer);
     clearInterval(contextPoller);
+    clearInterval(batchTimer);
+    flushEventBuffer();
     localStorage.removeItem("cbt_session_id");
     document.documentElement.removeAttribute("data-hbmds-active");
     try { chrome.runtime.sendMessage({ type: "RESET_STATE" }); } catch {}

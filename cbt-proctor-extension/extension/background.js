@@ -13,10 +13,16 @@
 //   B stops,  A recent → extension was disabled       → EXTENSION_DISABLED
 //   Both stop together → escalate to CRITICAL_DISCONNECT after full timeout
 
-const SERVER_BASE  = "http://localhost:3000";
-const REPORT_URL   = `${SERVER_BASE}/api/report`;
-const EXT_PING_URL = `${SERVER_BASE}/api/ext-ping`;
-const ALLOWED_HOSTNAMES = new Set(["localhost", "127.0.0.1"]);
+importScripts("config.js");
+
+// Resolved from managed storage (enterprise policy) with localhost fallback.
+let SERVER_BASE       = DEFAULT_SERVER_BASE;
+let ALLOWED_HOSTNAMES = new Set(["localhost", "127.0.0.1"]);
+
+const configReady = getServerBase().then((base) => {
+    SERVER_BASE = base;
+    try { ALLOWED_HOSTNAMES.add(new URL(base).hostname); } catch {}
+});
 
 function isAllowedUrl(url) {
     try {
@@ -32,10 +38,11 @@ async function getStudentId() {
 }
 
 async function sendViolation(eventType, detail, overrideId = null, sessionId = null, violationURL = "") {
+    await configReady;
     const studentId = overrideId || await getStudentId();
     if (!studentId) return;
     try {
-        await fetch(REPORT_URL, {
+        await fetch(`${SERVER_BASE}/api/report`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -50,10 +57,11 @@ async function sendViolation(eventType, detail, overrideId = null, sessionId = n
 // EXTENSION PING — Signal B
 // ---------------------------------------------------------------------------
 async function sendExtPing() {
+    await configReady;
     const studentId = await getStudentId();
     if (!studentId) return;
     try {
-        await fetch(EXT_PING_URL, {
+        await fetch(`${SERVER_BASE}/api/ext-ping`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ studentId, timestamp: new Date().toISOString() }),
@@ -72,13 +80,23 @@ sendExtPing();
 // ---------------------------------------------------------------------------
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
     try {
+        await configReady;
         const tab = await chrome.tabs.get(tabId);
-        if (tab.url && !isAllowedUrl(tab.url))
-            sendViolation("TAB_SWITCH", `Switched to: ${tab.url}`, null, null, tab.url);
+        // onActivated can fire at tab creation before any URL is committed
+        // (url and pendingUrl both empty) — re-read once after the navigation starts
+        let url = tab.pendingUrl || tab.url;
+        if (!url) {
+            await new Promise((r) => setTimeout(r, 500));
+            const t2 = await chrome.tabs.get(tabId);
+            url = t2.pendingUrl || t2.url;
+        }
+        if (url && !isAllowedUrl(url))
+            sendViolation("TAB_SWITCH", `Switched to: ${url}`, null, null, url);
     } catch {}
 });
 
-chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+chrome.tabs.onUpdated.addListener(async (_tabId, changeInfo, tab) => {
+    await configReady;
     if (changeInfo.status === "complete" && tab.url && !isAllowedUrl(tab.url))
         sendViolation("UNAUTHORIZED_NAVIGATION", `Navigated to: ${tab.url}`, null, null, tab.url);
 });

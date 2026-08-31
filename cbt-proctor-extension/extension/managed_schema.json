@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "serverUrl": {
+      "type": "string",
+      "title": "HBMDS server base URL",
+      "description": "Base URL of the proctoring server, e.g. https://cbt.campus.edu. Pushed via Chrome Enterprise Policy / AD Group Policy."
+    }
+  }
+}

@@ -486,7 +486,8 @@ body {
 
 <script>
 // ===== CONFIG =====
-const SERVER = "http://localhost:3000";
+// Same-origin: works locally and behind the nginx reverse proxy
+const SERVER = window.location.origin;
 let authToken = null;
 let socket    = null;
 

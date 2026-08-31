@@ -96,6 +96,9 @@ def make_driver():
     if os.path.isdir(EXT_PATH):
         opts.add_argument(f"--load-extension={EXT_PATH}")
         opts.add_argument("--disable-extensions-except=" + EXT_PATH)
+    # Branded Chrome >= 137 ignores --load-extension; Selenium Manager fetches
+    # Chrome for Testing (cached after first download), which still honours it.
+    opts.browser_version = "stable"
     return webdriver.Chrome(options=opts), tmp
 
 

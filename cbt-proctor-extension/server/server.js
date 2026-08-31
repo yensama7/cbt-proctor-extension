@@ -15,6 +15,15 @@ const ADMIN_USER   = process.env.ADMIN_USER   || "admin";
 const ADMIN_PASS   = process.env.ADMIN_PASS   || "admin123";
 const TOKEN_SECRET = process.env.TOKEN_SECRET || crypto.randomBytes(32).toString("hex");
 const PORT         = process.env.PORT         || 3000;
+const MONGO_URI    = process.env.MONGO_URI    || "mongodb://127.0.0.1:27017/cbt_logs";
+const CORS_ORIGIN  = process.env.CORS_ORIGIN  || "*";
+const TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // admin tokens expire after 12h
+
+// Refuse to boot into production with development credentials
+if (process.env.NODE_ENV === "production" && ADMIN_PASS === "admin123") {
+    console.error("FATAL: ADMIN_PASS is still the development default. Set ADMIN_PASS before deploying.");
+    process.exit(1);
+}
 
 // Signal A (page heartbeat) timeout — 45s to allow Chrome tab throttling
 const HEARTBEAT_TIMEOUT_MS  = 45_000;
@@ -28,16 +37,20 @@ const WATCHDOG_INTERVAL_MS  = 8_000;
 // ---------------------------------------------------------------------------
 const app    = express();
 const server = http.createServer(app);
-const io     = new Server(server, { cors: { origin: "*" } });
+const io     = new Server(server, { cors: { origin: CORS_ORIGIN } });
 
-app.use(cors());
+app.set("trust proxy", 1); // behind nginx in production
+app.use(cors({ origin: CORS_ORIGIN }));
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
 mongoose
-    .connect("mongodb://127.0.0.1:27017/cbt_logs")
+    .connect(MONGO_URI, { maxPoolSize: 100, wtimeoutMS: 2500 })
     .then(() => console.log("✅ MongoDB Connected"))
-    .catch((err) => console.error("❌ MongoDB Error:", err));
+    .catch((err) => {
+        console.error("❌ MongoDB Error:", err.message);
+        process.exit(1); // let the process manager / Docker restart us
+    });
 
 // ---------------------------------------------------------------------------
 // SESSION STORE
@@ -47,6 +60,10 @@ mongoose
 //   lastExtPing   — last /api/ext-ping   (Signal B: extension is running)
 //
 // { studentId → { lastHeartbeat: ms, lastExtPing: ms } }
+//
+// ponytail: in-memory Map — single-instance only. One Node process handles
+// ~220 req/s (1000 students) with room to spare; move to Redis TTL keys
+// (improve.md §1A) only if you need multiple server instances behind nginx.
 // ---------------------------------------------------------------------------
 const sessions = new Map();
 
@@ -68,8 +85,21 @@ function touchExtPing(studentId) {
 const isValidId = (id) =>
     typeof id === "string" && id.trim() !== "" && id !== "Unknown" && id !== "undefined";
 
-const generateToken = (username) =>
-    crypto.createHmac("sha256", TOKEN_SECRET).update(username).digest("hex");
+// Constant-time string comparison (hashes both sides to normalize length)
+const safeEqual = (a, b) =>
+    crypto.timingSafeEqual(
+        crypto.createHash("sha256").update(String(a)).digest(),
+        crypto.createHash("sha256").update(String(b)).digest()
+    );
+
+const sign = (payload) =>
+    crypto.createHmac("sha256", TOKEN_SECRET).update(payload).digest("hex");
+
+// Token format: "<expiryEpochMs>.<hmac(username.expiry)>"
+const generateToken = (username) => {
+    const exp = Date.now() + TOKEN_TTL_MS;
+    return `${exp}.${sign(`${username}.${exp}`)}`;
+};
 
 const buildTimeRangeQuery = (start, end) => {
     const range = {};
@@ -83,12 +113,13 @@ const escapeCsv = (v) => `"${(v == null ? "" : String(v)).replace(/"/g, '""')}"`
 // One-way hash for GDPR-compliant pseudonymization per paper Section III.D
 const hashId = (id) => crypto.createHash("sha256").update(String(id)).digest("hex");
 
-const persistAndBroadcast = async ({ studentId, sessionId, eventType, detail, violationURL, clientTimestamp }) => {
+const persistAndBroadcast = async ({ studentId, sessionId, eventType, detail, violationURL, clientTimestamp, sentAt }) => {
     const pseudonymizedId = hashId(studentId);
     const log = new ViolationLog({
         pseudonymizedId, sessionId: sessionId || "", eventType,
         violationURL: violationURL || "", detail,
         timestamp: clientTimestamp,
+        sentAt: sentAt || null,
     });
     await log.save();
     io.emit("new_violation", {
@@ -106,7 +137,12 @@ const persistAndBroadcast = async ({ studentId, sessionId, eventType, detail, vi
 // ---------------------------------------------------------------------------
 const authenticate = (req, res, next) => {
     const [scheme, token] = (req.headers.authorization || "").split(" ");
-    if (scheme === "Bearer" && token === generateToken(ADMIN_USER)) return next();
+    const [exp, sig]      = (token || "").split(".");
+    if (
+        scheme === "Bearer" && sig &&
+        Date.now() < Number(exp) &&
+        safeEqual(sig, sign(`${ADMIN_USER}.${exp}`))
+    ) return next();
     res.status(401).json({ error: "Unauthorized" });
 };
 
@@ -259,23 +295,42 @@ app.post("/api/logout", async (req, res) => {
 // Admin login
 app.post("/api/login", (req, res) => {
     const { username, password } = req.body;
-    if (username === ADMIN_USER && password === ADMIN_PASS)
-        return res.json({ success: true, token: generateToken(username) });
+    if (username != null && password != null &&
+        safeEqual(username, ADMIN_USER) && safeEqual(password, ADMIN_PASS))
+        return res.json({ success: true, token: generateToken(ADMIN_USER) });
     res.status(401).json({ success: false });
 });
 
-// Violation report
+// Violation report — accepts a single event object, or a batch:
+//   { studentId, sessionId, sentAt, events: [{ eventType, detail, violationURL, timestamp }] }
+// sentAt = when the client actually transmitted; used for latency so batched/offline
+// flushes don't register as multi-second false latency spikes (improve.md §4B).
 app.post("/api/report", async (req, res) => {
-    const { studentId, sessionId, eventType, detail, violationURL, timestamp } = req.body;
-    if (!isValidId(studentId)) return res.status(400).json({ error: "Login required" });
-    touchHeartbeat(studentId);
-    try {
-        await persistAndBroadcast({ studentId, sessionId, eventType, detail, violationURL, clientTimestamp: timestamp });
-        res.sendStatus(200);
-    } catch (err) {
-        console.error("Report save failed:", err);
-        res.status(500).json({ error: "Failed to save report" });
+    const body   = req.body || {};
+    const events = Array.isArray(body.events) ? body.events.slice(0, 100) : [body];
+    let saved = 0;
+    for (const e of events) {
+        const studentId = e.studentId || body.studentId;
+        if (!isValidId(studentId) || typeof e.eventType !== "string" || !e.eventType) continue;
+        touchHeartbeat(studentId);
+        try {
+            await persistAndBroadcast({
+                studentId,
+                sessionId:       e.sessionId || body.sessionId,
+                eventType:       e.eventType,
+                detail:          e.detail,
+                violationURL:    e.violationURL,
+                clientTimestamp: e.timestamp,
+                sentAt:          e.sentAt || body.sentAt,
+            });
+            saved++;
+        } catch (err) {
+            console.error("Report save failed:", err);
+            return res.status(500).json({ error: "Failed to save report" });
+        }
     }
+    if (!saved) return res.status(400).json({ error: "Login required" });
+    res.sendStatus(200);
 });
 
 // Fetch logs
@@ -330,7 +385,25 @@ app.get("/api/sessions", authenticate, (_req, res) => {
     res.json(buildSessionSummary());
 });
 
+// Health check for Docker / nginx / load balancers
+app.get("/healthz", (_req, res) => {
+    const dbUp = mongoose.connection.readyState === 1;
+    res.status(dbUp ? 200 : 503).json({ ok: dbUp, sessions: sessions.size });
+});
+
 // ---------------------------------------------------------------------------
 // START
 // ---------------------------------------------------------------------------
 server.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
+
+// Graceful shutdown so Docker stop / deploys don't drop in-flight writes
+const shutdown = async (sig) => {
+    console.log(`${sig} received — shutting down`);
+    server.close(async () => {
+        await mongoose.disconnect().catch(() => {});
+        process.exit(0);
+    });
+    setTimeout(() => process.exit(1), 10_000).unref(); // force-exit if close hangs
+};
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT",  () => shutdown("SIGINT"));

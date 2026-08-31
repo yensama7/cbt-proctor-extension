@@ -65,11 +65,13 @@ Static HTML served by Express. `login.html` sets `localStorage.cbt_student_id`; 
 
 ## Key Constraints
 
-- **`SERVER_BASE`** is hardcoded to `http://localhost:3000` in both `content.js` and `background.js`. Change both files if the server moves.
-- **Admin credentials** default to `admin` / `admin123`. Override with `ADMIN_USER` and `ADMIN_PASS` env vars.
-- **Admin token does not persist across server restarts** because `TOKEN_SECRET` is regenerated each time unless set via env var.
-- The extension `host_permissions` only covers `localhost` and `127.0.0.1` on port 3000.
-- MongoDB connection is hardcoded to `mongodb://127.0.0.1:27017/cbt_logs`.
+- **`SERVER_BASE`** is resolved by `extension/config.js` (shared by content.js and background.js): `chrome.storage.managed.serverUrl` (enterprise policy) with fallback to `http://localhost:3000` for development.
+- **Admin credentials** default to `admin` / `admin123`. Override with `ADMIN_USER` and `ADMIN_PASS` env vars. In `NODE_ENV=production` the server refuses to start on the default password.
+- **Admin tokens expire after 12h** and don't survive restarts unless `TOKEN_SECRET` is set via env var.
+- MongoDB connection comes from `MONGO_URI` env var (default `mongodb://127.0.0.1:27017/cbt_logs`), pooled with `maxPoolSize: 100`.
+- Non-critical content.js events are batched (3s flush via sendBeacon); `/api/report` accepts both a single event object and `{ studentId, sessionId, sentAt, events: [...] }` (max 100). `latencyMs` is computed from `sentAt` when present.
+- Production deployment is `docker-compose.yml` (nginx → node → mongo); nginx serves static files and rate-limits `/api`.
+- Selenium tests pin `browser_version = "stable"` (Chrome for Testing) because branded Chrome ≥137 ignores `--load-extension`.
 
 ## Event Types
 

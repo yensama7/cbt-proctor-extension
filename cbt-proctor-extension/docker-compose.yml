@@ -1,0 +1,43 @@
+# HBMDS production stack: nginx (edge) → node (API/WebSocket) → mongo
+# Usage: cp .env.example .env  →  edit .env  →  docker compose up -d --build
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+
+  server:
+    build: ./server
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      MONGO_URI: mongodb://mongo:27017/cbt_logs
+      ADMIN_USER: ${ADMIN_USER:?set ADMIN_USER in .env}
+      ADMIN_PASS: ${ADMIN_PASS:?set ADMIN_PASS in .env}
+      TOKEN_SECRET: ${TOKEN_SECRET:?set TOKEN_SECRET in .env}
+      CORS_ORIGIN: ${CORS_ORIGIN:-*}
+    depends_on:
+      - mongo
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./server/public:/usr/share/nginx/html:ro
+      # TLS: place fullchain.pem + privkey.pem in deploy/certs and uncomment
+      # - ./deploy/certs:/etc/nginx/certs:ro
+    depends_on:
+      - server
+
+volumes:
+  mongo_data:

@@ -81,7 +81,8 @@ def fetch_recent_logs(token, event_type, since_ts):
     return found
 
 
-def assert_event(token, event_type, since_ts, wait=3):
+def assert_event(token, event_type, since_ts, wait=8):
+    # wait=8: non-critical events are client-side batched (3s flush) before POST
     """Poll for event_type for up to wait seconds. Return (passed, latency_ms)."""
     deadline = time.time() + wait
     while time.time() < deadline:
@@ -103,6 +104,9 @@ def make_driver():
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-extensions-except=" + EXT_PATH)
+    # Branded Chrome >= 137 ignores --load-extension; Selenium Manager fetches
+    # Chrome for Testing (cached after first download), which still honours it.
+    opts.browser_version = "stable"
     return webdriver.Chrome(options=opts)
 
 

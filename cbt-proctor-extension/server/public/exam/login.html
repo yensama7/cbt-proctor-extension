@@ -237,7 +237,7 @@ function doLogin() {
   localStorage.setItem("cbt_student_name", name);
 
   // Notify server that exam is starting
-  fetch("http://localhost:3000/api/exam/start", {
+  fetch("/api/exam/start", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ studentId: fullId })

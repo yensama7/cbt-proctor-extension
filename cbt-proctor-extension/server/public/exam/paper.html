@@ -450,7 +450,7 @@ function submitExam() {
   closeModal();
   // Signal content.js to stop monitoring and clear extension state
   window.dispatchEvent(new CustomEvent("cbt_exam_submitted"));
-  fetch("http://localhost:3000/api/logout", {
+  fetch("/api/logout", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ studentId })
