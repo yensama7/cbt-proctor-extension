@@ -312,7 +312,10 @@ app.post("/api/report", async (req, res) => {
     for (const e of events) {
         const studentId = e.studentId || body.studentId;
         if (!isValidId(studentId) || typeof e.eventType !== "string" || !e.eventType) continue;
-        touchHeartbeat(studentId);
+        // Only refresh live sessions — a late report (post-submit PAGE_UNLOAD,
+        // offline flush) must not resurrect an ended session, or the watchdog
+        // fires a false EXTENSION_DISABLED 25s after the student submits.
+        if (sessions.has(studentId)) touchHeartbeat(studentId);
         try {
             await persistAndBroadcast({
                 studentId,

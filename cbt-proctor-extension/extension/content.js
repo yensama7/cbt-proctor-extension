@@ -178,8 +178,10 @@ function flushEventBuffer() {
     }
 }
 
+let examSubmitted = false;
+
 function reportViolation(type, detail, violationURL = "") {
-    if (!studentId) return;
+    if (!studentId || examSubmitted) return;
 
     const payload = {
         studentId, sessionId, eventType: type, detail, violationURL,
@@ -293,6 +295,7 @@ function attachContextMenuBlocker() {
 // paper.html dispatches this when the student submits — clear all state so
 // background.js stops monitoring after the exam ends.
 window.addEventListener("cbt_exam_submitted", () => {
+    examSubmitted = true;
     clearInterval(heartbeatTimer);
     clearInterval(contextPoller);
     clearInterval(batchTimer);
