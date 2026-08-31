@@ -55,7 +55,7 @@ body {
 }
 .login-card {
   position: relative; z-index: 1;
-  width: 380px;
+  width: min(380px, calc(100vw - 32px));
   background: var(--s1);
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -350,6 +350,32 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 10px; }
 
+/* ===== RESPONSIVE ===== */
+@media (max-width: 900px) {
+  body { overflow: auto; }
+  #app { height: auto; min-height: 100vh; }
+  .content { flex-direction: column; overflow: visible; }
+  .left-panel {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .sessions-list { max-height: 220px; }
+  .stats-grid { grid-template-columns: repeat(4, 1fr); }
+  .session-counts { max-width: 420px; }
+  /* Feed keeps its own scroll area on small screens */
+  .right-panel { height: 75vh; }
+  .topbar { padding: 0 14px; }
+  .feed { padding: 14px; }
+  .feed-header { padding: 12px 14px; }
+}
+@media (max-width: 520px) {
+  .stats-grid { grid-template-columns: 1fr 1fr; }
+  .topbar-tag { display: none; }
+  .vrow { grid-template-columns: 1fr auto; }
+  .vrow-left { display: none; }
+}
+
 /* TOAST */
 #toast {
   position: fixed; bottom: 24px; right: 24px;
@@ -451,7 +477,7 @@ body {
         <select class="date-select" id="dateFilter" onchange="applyDateFilter()">
           <option value="">All dates</option>
         </select>
-        <button class="export-btn" onclick="exportXlsx()">⬇ Export Excel (.xlsx)</button>
+        <button class="export-btn" onclick="exportXlsx()">Export Excel (.xlsx)</button>
       </div>
 
       <!-- Student ID filter -->
@@ -472,7 +498,6 @@ body {
       </div>
       <div class="feed" id="feed">
         <div class="empty-state">
-          <div class="icon">🛡</div>
           <div>Waiting for violations…</div>
           <div style="color:var(--muted);font-size:10px">Events appear here in real time</div>
         </div>
@@ -541,7 +566,7 @@ const ICONS = {
 };
 
 function getSev(type)  { return SEVERITY[type] || "low"; }
-function getIcon(type) { return ICONS[type] || { emoji: "⚠", cls: "yellow" }; }
+function getIcon(type) { return ICONS[type] || { emoji: "[?]", cls: "yellow" }; }
 
 // ===== LOGIN =====
 document.addEventListener("keydown", (e) => {
@@ -600,17 +625,24 @@ function connectSocket() {
     showToast(v);
   });
 
-  // Server sends full summary on connect + on any session change
+  // Server sends full summary on connect + on any session change.
+  // Merge: disconnected students are deleted server-side, but the admin still
+  // needs to see them flagged as lost — keep locally-flagged entries around.
   socket.on("session_summary", (summary) => {
-    sessionSummary = summary;
+    const kept = sessionSummary.filter(s =>
+      s.status === "offline" && !summary.find(x => x.studentId === s.studentId));
+    sessionSummary = [...summary, ...kept];
     renderSessions();
     updateStats();
   });
 
   // Individual session events (for instant feedback before next summary)
   socket.on("session_started", (id) => {
-    // Add optimistically if not already in summary
-    if (!sessionSummary.find(s => s.studentId === id)) {
+    const existing = sessionSummary.find(s => s.studentId === id);
+    if (existing) {
+      existing.status = "online";
+      existing.lastSeen = Date.now();
+    } else {
       sessionSummary.push({ studentId: id, status: "online", lastSeen: Date.now() });
     }
     renderSessions();
@@ -619,7 +651,14 @@ function connectSocket() {
   });
 
   socket.on("session_ended", ({ studentId, reason }) => {
-    sessionSummary = sessionSummary.filter(s => s.studentId !== studentId);
+    if (reason === "SUBMITTED") {
+      sessionSummary = sessionSummary.filter(s => s.studentId !== studentId);
+    } else {
+      // CRITICAL_DISCONNECT: keep the student visible, flagged as lost
+      const s = sessionSummary.find(x => x.studentId === studentId);
+      if (s) s.status = "offline";
+      else sessionSummary.push({ studentId, status: "offline", lastSeen: Date.now() });
+    }
     renderSessions();
     updateStats();
   });
@@ -752,9 +791,8 @@ async function applyDateFilter() {
 function renderFeed() {
   let logs = allLogs;
 
-  if (studentFilterVal) {
-    logs = logs.filter(l => (l.pseudonymizedId || "").toLowerCase().includes(studentFilterVal.toLowerCase()));
-  }
+  // Student filtering happens server-side (raw ID is hashed there) — do not
+  // re-filter here: the raw ID never matches its own hash and would blank the feed.
   if (activeTypes.size > 0) {
     logs = logs.filter(l => activeTypes.has(l.eventType));
   }
@@ -764,7 +802,6 @@ function renderFeed() {
   if (logs.length === 0) {
     document.getElementById("feed").innerHTML = `
       <div class="empty-state">
-        <div class="icon">🛡</div>
         <div>No violations found</div>
         <div style="color:var(--muted);font-size:10px">Try adjusting filters or date</div>
       </div>`;

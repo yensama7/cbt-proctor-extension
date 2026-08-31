@@ -74,9 +74,10 @@ function touchHeartbeat(studentId) {
 
 function touchExtPing(studentId) {
     const s = sessions.get(studentId) || {};
-    const isNew = !s.lastExtPing && !s.lastHeartbeat;
-    sessions.set(studentId, { ...s, lastExtPing: Date.now() });
-    return isNew;
+    const isNew     = !s.lastExtPing && !s.lastHeartbeat;
+    const recovered = !!s.extDisabledLogged; // extension re-enabled after being flagged
+    sessions.set(studentId, { ...s, lastExtPing: Date.now(), extDisabledLogged: false });
+    return { isNew, recovered };
 }
 
 // ---------------------------------------------------------------------------
@@ -173,7 +174,9 @@ function buildSessionSummary() {
 
 function getStatus(hbAge, extAge) {
     if (hbAge < HEARTBEAT_TIMEOUT_MS && extAge < EXT_PING_TIMEOUT_MS) return "online";
-    if (extAge >= EXT_PING_TIMEOUT_MS && hbAge < HEARTBEAT_TIMEOUT_MS) return "ext_disabled";
+    // ext_disabled requires a heartbeat newer than the ext timeout — proof the
+    // page outlived the extension. If both went stale together it's a disconnect.
+    if (extAge >= EXT_PING_TIMEOUT_MS && hbAge < EXT_PING_TIMEOUT_MS) return "ext_disabled";
     return "offline";
 }
 
@@ -196,21 +199,32 @@ setInterval(async () => {
         const hbDead  = hbAge  >= HEARTBEAT_TIMEOUT_MS;
         const extDead = extAge >= EXT_PING_TIMEOUT_MS;
 
-        // Case 1: Extension disabled — heartbeat still fresh, ext-ping gone
-        if (!hbDead && extDead) {
-            sessions.delete(studentId);
-            io.emit("session_ended", { studentId, reason: "EXTENSION_DISABLED" });
-            console.log(`[EXT DISABLED] ${studentId}`);
-            try {
-                await persistAndBroadcast({
-                    studentId,
-                    eventType: "EXTENSION_DISABLED",
-                    detail:    "Extension was disabled or removed by the student.",
-                    clientTimestamp: new Date().toISOString(),
-                });
-            } catch (err) { console.error("Failed to log EXTENSION_DISABLED:", err); }
+        // Case 1: Extension disabled — ext-ping gone while heartbeats are
+        // demonstrably still arriving (fresher than the ext timeout window).
+        // Keep the session (the page is live) so the dashboard shows it as
+        // ext_disabled instead of the student vanishing, and flag it so we
+        // log the violation exactly once, not every watchdog tick.
+        if (extDead && hbAge < EXT_PING_TIMEOUT_MS) {
+            if (!s.extDisabledLogged) {
+                s.extDisabledLogged = true;
+                io.emit("session_summary", buildSessionSummary());
+                console.log(`[EXT DISABLED] ${studentId}`);
+                try {
+                    await persistAndBroadcast({
+                        studentId,
+                        eventType: "EXTENSION_DISABLED",
+                        detail:    "Extension was disabled or removed by the student.",
+                        clientTimestamp: new Date().toISOString(),
+                    });
+                } catch (err) { console.error("Failed to log EXTENSION_DISABLED:", err); }
+            }
             continue;
         }
+
+        // Ambiguous window: ext-ping dead but heartbeat 25–45s stale — both
+        // signals may have stopped together. Wait for the next tick to resolve
+        // into recovery or CRITICAL_DISCONNECT rather than misclassifying.
+        if (extDead && !hbDead) continue;
 
         // Case 2: Both signals dead → network failure or browser closed
         if (hbDead && extDead) {
@@ -252,11 +266,9 @@ app.post("/api/heartbeat", (req, res) => {
 app.post("/api/ext-ping", (req, res) => {
     const { studentId } = req.body;
     if (isValidId(studentId)) {
-        const isNew = touchExtPing(studentId);
-        if (isNew) {
-            io.emit("session_started", studentId);
-            io.emit("session_summary", buildSessionSummary());
-        }
+        const { isNew, recovered } = touchExtPing(studentId);
+        if (isNew) io.emit("session_started", studentId);
+        if (isNew || recovered) io.emit("session_summary", buildSessionSummary());
     }
     res.sendStatus(200);
 });
